@@ -343,13 +343,14 @@ async def main():
         logger.critical("DISCORD_TOKEN is not set. Exiting.")
         sys.exit(1)
 
-    await _ensure_setup()
-
     try:
-        await bot.start(DISCORD_TOKEN)
+        # `async with bot` rebinds bot.loop to the running loop. The bot was
+        # constructed at import time, so without this py-cord schedules gateway
+        # heartbeats onto a loop that never runs and they hang forever.
+        async with bot:
+            await _ensure_setup()
+            await bot.start(DISCORD_TOKEN)
     finally:
-        if not bot.is_closed():
-            await bot.close()
         if hasattr(bot, 'state_manager'):
             bot.state_manager.close_db()
         logger.info("Shutdown complete.")
