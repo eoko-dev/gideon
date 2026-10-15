@@ -123,6 +123,15 @@ class ChannelAndThreadTests(ApiTestCase):
         self.assertEqual(self.state.get_effective_session_timeout("100"), 6)
         self.assertEqual(self.state.get_effective_max_memory_summaries("100"), 4)
 
+    async def test_channel_memory_override_cleared_by_null(self):
+        await self.client.put("/api/channels/100", json={
+            "session_timeout_hours": 6, "max_memory_summaries": 4})
+        resp = await self.client.put("/api/channels/100", json={"session_timeout_hours": None})
+        self.assertEqual(resp.status, 200, await resp.text())
+        self.assertEqual(self.state.get_effective_session_timeout("100"),
+                         self.state.get_session_timeout_hours())
+        self.assertEqual(self.state.get_effective_max_memory_summaries("100"), 4)
+
     async def test_thread_update_validation(self):
         self.db.add_thread("t1", "100", "original", datetime.now())
         for name in ("", "   ", "x" * 101, 5):

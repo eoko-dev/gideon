@@ -238,22 +238,25 @@ class BotStateManager:
             logger.error(f"Error reading {column} for channel {channel_id}: {e}", exc_info=True)
             return None
 
-    def set_channel_memory_config(self, channel_id: str, session_timeout_hours=None,
-                                   memory_summary_enabled=None, max_memory_summaries=None):
-        """Updates per-channel memory config overrides (None = use global)."""
+    _CHANNEL_MEMORY_FIELDS = ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries')
+
+    def set_channel_memory_config(self, channel_id: str, **overrides):
+        """Updates the given per-channel memory overrides; a value of None clears it (falls back to global)."""
         import sqlite3
+        unknown = set(overrides) - set(self._CHANNEL_MEMORY_FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown memory config fields: {', '.join(sorted(unknown))}")
         self.db_manager._ensure_channel_exists(str(channel_id))
         updates = []
         params = []
-        if session_timeout_hours is not None:
-            updates.append("session_timeout_hours = ?")
-            params.append(session_timeout_hours)
-        if memory_summary_enabled is not None:
-            updates.append("memory_summary_enabled = ?")
-            params.append(1 if memory_summary_enabled else 0)
-        if max_memory_summaries is not None:
-            updates.append("max_memory_summaries = ?")
-            params.append(max_memory_summaries)
+        for field in self._CHANNEL_MEMORY_FIELDS:
+            if field not in overrides:
+                continue
+            value = overrides[field]
+            if field == 'memory_summary_enabled' and value is not None:
+                value = 1 if value else 0
+            updates.append(f"{field} = ?")
+            params.append(value)
         if not updates:
             return
         params.append(str(channel_id))
