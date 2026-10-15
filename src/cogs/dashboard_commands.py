@@ -2,6 +2,7 @@
 import asyncio
 import discord
 import logging
+import socket
 from typing import Optional
 from discord.ext import commands
 from ..config import DASHBOARD_ENABLED, DASHBOARD_PORT, DASHBOARD_SECRET
@@ -84,7 +85,7 @@ class DashboardCommands(commands.Cog, name="DashboardCommands"):
             await ctx.respond("Dashboard server is not running. Check logs for errors.", ephemeral=True)
             return
 
-        ws_count = len(self.server._ws_clients)
+        ws_count = self.server.ws_client_count
         embed = discord.Embed(
             title="Admin Dashboard Status",
             color=discord.Color.green()
@@ -92,7 +93,12 @@ class DashboardCommands(commands.Cog, name="DashboardCommands"):
         embed.add_field(name="Status", value="Running", inline=True)
         embed.add_field(name="Port", value=str(DASHBOARD_PORT), inline=True)
         embed.add_field(name="WebSocket Clients", value=str(ws_count), inline=True)
-        embed.add_field(name="URL", value=f"`http://localhost:{DASHBOARD_PORT}`", inline=False)
+        embed.add_field(
+            name="URL",
+            value=f"`http://{socket.gethostname()}:{DASHBOARD_PORT}`\n"
+                  "Listens on all interfaces; use this host's network address if the name doesn't resolve.",
+            inline=False,
+        )
 
         await ctx.respond(embed=embed, ephemeral=True)
 

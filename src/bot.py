@@ -8,6 +8,7 @@ don't repeat them.
 import asyncio
 import logging
 import sys
+import time
 
 import discord
 from discord.ext import commands, tasks
@@ -39,6 +40,7 @@ bot = commands.Bot(
     intents=intents,
     sync_commands=False,
 )
+bot.start_time = time.time()
 
 # ─── Provider clients ────────────────────────────────────────────────────────
 

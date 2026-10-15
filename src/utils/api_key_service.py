@@ -137,6 +137,16 @@ class APIKeyService:
             })
         return result
 
+    def get_status_summary(self) -> Dict[str, int]:
+        """Count stored keys by validation status without decrypting anything."""
+        keys = self.db.get_all_api_keys()
+        statuses = [k.get('validation_status') or 'untested' for k in keys]
+        return {
+            'total': len(keys),
+            'invalid': statuses.count('invalid'),
+            'untested': statuses.count('untested'),
+        }
+
     def get_audit_log(self, key_id: Optional[str] = None,
                       limit: int = 50) -> List[Dict[str, Any]]:
         """Get the audit log for API key operations."""

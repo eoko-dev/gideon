@@ -1,1207 +1,1319 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
     <title>Gideon Admin Dashboard</title>
-    <link rel="stylesheet" href="/css/dashboard.css?v=4">
+    <script src="/js/theme.js?v=5"></script>
+    <link rel="stylesheet" href="/css/dashboard.css?v=5">
 </head>
 <body>
-    <!-- Login Screen -->
-    <div id="login-screen" class="login-screen">
+    <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <symbol id="i-overview" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></symbol>
+            <symbol id="i-settings" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
+            <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/></symbol>
+            <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+            <symbol id="i-threads" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+            <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+            <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></symbol>
+            <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+            <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></symbol>
+            <symbol id="i-video" viewBox="0 0 24 24"><path d="m16 13 5.22 3.48a.5.5 0 0 0 .78-.42V7.94a.5.5 0 0 0-.78-.42L16 11"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+            <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+            <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+            <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5M19.1 4.9C23 8.8 23 15.1 19.1 19"/><circle cx="12" cy="12" r="2"/></symbol>
+            <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+            <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+            <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+            <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></symbol>
+            <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+            <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+            <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+            <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
+            <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+            <symbol id="i-x-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></symbol>
+            <symbol id="i-alert-triangle" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+            <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+            <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+            <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/></symbol>
+            <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+            <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+            <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+            <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+            <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+            <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+            <symbol id="i-corner" viewBox="0 0 24 24"><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></symbol>
+            <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></symbol>
+        </defs>
+    </svg>
+
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div id="boot" class="boot" aria-hidden="true"><div class="brand-mark">G</div></div>
+
+    <!-- Login -->
+    <div id="login-screen" class="login-screen" hidden>
         <div class="login-card">
-            <div class="login-header">
-                <div class="login-logo">G</div>
-                <h1>Gideon</h1>
-                <p>Admin Dashboard</p>
+            <div class="login-brand">
+                <div class="brand-mark brand-mark-lg" aria-hidden="true">G</div>
+                <div>
+                    <h1>Gideon</h1>
+                    <p>Admin dashboard</p>
+                </div>
             </div>
-            <form id="login-form">
-                <div class="form-group">
-                    <label for="secret-input">Dashboard Secret</label>
+            <form id="login-form" novalidate>
+                <div class="field">
+                    <label for="secret-input">Dashboard secret</label>
                     <input type="password" id="secret-input" placeholder="Enter dashboard secret" autocomplete="current-password" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-full">Sign In</button>
-                <div id="login-error" class="error-message" style="display:none;"></div>
+                <div id="login-error" class="form-alert" role="alert" hidden></div>
+                <button type="submit" id="login-submit" class="btn btn-primary btn-block">Sign in</button>
             </form>
         </div>
     </div>
 
-    <!-- Main Dashboard -->
-    <div id="dashboard" class="dashboard" style="display:none;">
-        <!-- Sidebar -->
-        <nav class="sidebar" role="navigation" aria-label="Main navigation">
-            <div class="sidebar-header">
-                <div class="sidebar-logo" aria-hidden="true">G</div>
-                <h2>Gideon</h2>
-                <span class="badge" id="bot-status-badge">Connecting...</span>
-            </div>
-            <div class="sidebar-search">
-                <input type="text" id="global-search" placeholder="Search tabs..." autocomplete="off" aria-label="Search sidebar tabs">
-            </div>
-            <ul class="nav-menu">
-                <li class="nav-section-header" aria-hidden="true">Management</li>
-                <li class="nav-item active" data-tab="overview" aria-current="page">
-                    <span class="nav-icon" aria-hidden="true">&#9634;</span> <span class="nav-label">Overview</span>
-                </li>
-                <li class="nav-item" data-tab="api-keys">
-                    <span class="nav-icon" aria-hidden="true">&#128273;</span> <span class="nav-label">API Keys</span>
-                </li>
-                <li class="nav-item" data-tab="settings">
-                    <span class="nav-icon" aria-hidden="true">&#9881;</span> <span class="nav-label">Settings</span>
-                </li>
-                <li class="nav-section-header" aria-hidden="true">Configuration</li>
-                <li class="nav-item" data-tab="channels">
-                    <span class="nav-icon" aria-hidden="true">&#9776;</span> <span class="nav-label">Channels</span>
-                </li>
-                <li class="nav-item" data-tab="threads">
-                    <span class="nav-icon" aria-hidden="true">&#8801;</span> <span class="nav-label">Threads</span>
-                </li>
-                <li class="nav-item" data-tab="personas">
-                    <span class="nav-icon" aria-hidden="true">&#128125;</span> <span class="nav-label">Personas</span>
-                </li>
-                <li class="nav-item" data-tab="image-gen">
-                    <span class="nav-icon" aria-hidden="true">&#127912;</span> <span class="nav-label">Image Gen</span>
-                </li>
-                <li class="nav-item" data-tab="video-gen">
-                    <span class="nav-icon" aria-hidden="true">&#127909;</span> <span class="nav-label">Video Gen</span>
-                </li>
-                <li class="nav-section-header" aria-hidden="true">Monitoring</li>
-                <li class="nav-item" data-tab="memory">
-                    <span class="nav-icon" aria-hidden="true">&#129504;</span> <span class="nav-label">Memory</span>
-                </li>
-                <li class="nav-item" data-tab="messages">
-                    <span class="nav-icon" aria-hidden="true">&#9993;</span> <span class="nav-label">Messages</span>
-                </li>
-                <li class="nav-item" data-tab="diagnostics">
-                    <span class="nav-icon" aria-hidden="true">&#9889;</span> <span class="nav-label">Diagnostics</span>
-                </li>
-                <li class="nav-item" data-tab="backup">
-                    <span class="nav-icon" aria-hidden="true">&#128190;</span> <span class="nav-label">Backup & Restore</span>
-                </li>
-                <li class="nav-item" data-tab="activity">
-                    <span class="nav-icon pulse-dot" aria-hidden="true">&#9679;</span> <span class="nav-label">Live Activity</span>
-                </li>
-            </ul>
-            <div class="sidebar-footer">
-                <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
-                    <span id="theme-icon" aria-hidden="true">&#9790;</span> <span id="theme-label">Light Mode</span>
+    <!-- Dashboard -->
+    <div id="dashboard" class="app" hidden>
+        <aside id="sidebar" class="sidebar" aria-label="Sidebar">
+            <div class="sidebar-head">
+                <div class="brand">
+                    <div class="brand-mark" aria-hidden="true">G</div>
+                    <span class="brand-name">Gideon</span>
+                </div>
+                <button type="button" id="sidebar-collapse" class="icon-btn sidebar-collapse" aria-label="Collapse sidebar" aria-pressed="false" title="Collapse sidebar">
+                    <svg class="icon" aria-hidden="true"><use href="#i-panel"/></svg>
                 </button>
-                <button id="logout-btn" class="btn btn-secondary btn-small btn-full">Sign Out</button>
+                <button type="button" id="sidebar-close" class="icon-btn sidebar-close" aria-label="Close menu">
+                    <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+                </button>
             </div>
-        </nav>
+            <nav class="nav" aria-label="Main navigation">
+                <div class="nav-group" data-group="core">
+                    <button type="button" class="nav-group-toggle" aria-expanded="true" aria-controls="nav-list-core">
+                        <span>Core</span>
+                        <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                    </button>
+                    <ul class="nav-list" id="nav-list-core">
+                        <li><a class="nav-item" href="#overview" data-tab="overview" title="Overview"><svg class="icon" aria-hidden="true"><use href="#i-overview"/></svg><span class="nav-label">Overview</span></a></li>
+                        <li><a class="nav-item" href="#settings" data-tab="settings" title="Settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span class="nav-label">Settings</span></a></li>
+                        <li><a class="nav-item" href="#api-keys" data-tab="api-keys" title="API Keys"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><span class="nav-label">API Keys</span></a></li>
+                    </ul>
+                </div>
+                <div class="nav-group" data-group="conversations">
+                    <button type="button" class="nav-group-toggle" aria-expanded="true" aria-controls="nav-list-conversations">
+                        <span>Conversations</span>
+                        <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                    </button>
+                    <ul class="nav-list" id="nav-list-conversations">
+                        <li><a class="nav-item" href="#channels" data-tab="channels" title="Channels"><svg class="icon" aria-hidden="true"><use href="#i-hash"/></svg><span class="nav-label">Channels</span></a></li>
+                        <li><a class="nav-item" href="#threads" data-tab="threads" title="Threads"><svg class="icon" aria-hidden="true"><use href="#i-threads"/></svg><span class="nav-label">Threads</span></a></li>
+                        <li><a class="nav-item" href="#personas" data-tab="personas" title="Personas"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><span class="nav-label">Personas</span></a></li>
+                        <li><a class="nav-item" href="#memory" data-tab="memory" title="Memory"><svg class="icon" aria-hidden="true"><use href="#i-database"/></svg><span class="nav-label">Memory</span></a></li>
+                        <li><a class="nav-item" href="#messages" data-tab="messages" title="Messages"><svg class="icon" aria-hidden="true"><use href="#i-mail"/></svg><span class="nav-label">Messages</span></a></li>
+                    </ul>
+                </div>
+                <div class="nav-group" data-group="generation">
+                    <button type="button" class="nav-group-toggle" aria-expanded="true" aria-controls="nav-list-generation">
+                        <span>Generation</span>
+                        <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                    </button>
+                    <ul class="nav-list" id="nav-list-generation">
+                        <li><a class="nav-item" href="#image-gen" data-tab="image-gen" title="Image Gen"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg><span class="nav-label">Image Gen</span></a></li>
+                        <li><a class="nav-item" href="#video-gen" data-tab="video-gen" title="Video Gen"><svg class="icon" aria-hidden="true"><use href="#i-video"/></svg><span class="nav-label">Video Gen</span></a></li>
+                    </ul>
+                </div>
+                <div class="nav-group" data-group="operations">
+                    <button type="button" class="nav-group-toggle" aria-expanded="true" aria-controls="nav-list-operations">
+                        <span>Operations</span>
+                        <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                    </button>
+                    <ul class="nav-list" id="nav-list-operations">
+                        <li><a class="nav-item" href="#diagnostics" data-tab="diagnostics" title="Diagnostics"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="nav-label">Diagnostics</span></a></li>
+                        <li><a class="nav-item" href="#backup" data-tab="backup" title="Backup &amp; Restore"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg><span class="nav-label">Backup &amp; Restore</span></a></li>
+                        <li><a class="nav-item" href="#activity" data-tab="activity" title="Live Activity"><svg class="icon" aria-hidden="true"><use href="#i-radio"/></svg><span class="nav-label">Live Activity</span></a></li>
+                    </ul>
+                </div>
+            </nav>
+            <div class="sidebar-foot">
+                <span class="bot-status" id="bot-status-badge" data-state="connecting"><span class="status-dot"></span><span class="bot-status-text">Connecting</span></span>
+            </div>
+        </aside>
+        <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Overview Tab -->
-            <section id="tab-overview" class="tab-content active">
-                <div class="tab-header">
-                    <h2>Dashboard Overview</h2>
-                </div>
-                <div class="stats-grid">
-                    <div class="stat-card stat-accent-blue">
-                        <div class="stat-icon">&#127760;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-guilds">--</div>
-                            <div class="stat-label">Servers</div>
-                        </div>
-                    </div>
-                    <div class="stat-card stat-accent-purple">
-                        <div class="stat-icon">&#128172;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-messages">--</div>
-                            <div class="stat-label">Stored Messages</div>
-                        </div>
-                    </div>
-                    <div class="stat-card stat-accent-green">
-                        <div class="stat-icon">&#128279;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-threads">--</div>
-                            <div class="stat-label">Active Threads</div>
-                        </div>
-                    </div>
-                    <div class="stat-card stat-accent-amber">
-                        <div class="stat-icon">&#128226;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-channels">--</div>
-                            <div class="stat-label">Custom Channels</div>
-                        </div>
-                    </div>
-                    <div class="stat-card stat-accent-cyan">
-                        <div class="stat-icon">&#9889;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-latency">--</div>
-                            <div class="stat-label">Latency (ms)</div>
-                        </div>
-                    </div>
-                    <div class="stat-card stat-accent-rose">
-                        <div class="stat-icon">&#9200;</div>
-                        <div class="stat-body">
-                            <div class="stat-value" id="stat-uptime">--</div>
-                            <div class="stat-label">Uptime</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Bot Information</h3>
-                    </div>
-                    <div class="card-body">
-                        <div class="info-row"><span>Bot Name</span> <span id="info-bot-name">--</span></div>
-                        <div class="info-row"><span>Bot ID</span> <span id="info-bot-id">--</span></div>
-                        <div class="info-row"><span>Global Model</span> <span id="info-model" class="code">--</span></div>
-                        <div class="info-row"><span>Global Provider</span> <span id="info-provider">--</span></div>
-                        <div class="info-row"><span>Database Size</span> <span id="info-db-size">--</span></div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header"><h3>Provider Usage Dashboards</h3></div>
-                    <div class="card-body">
-                        <p class="tab-description" style="margin-bottom:12px;">Check costs and usage directly on each provider's dashboard.</p>
-                        <div class="provider-links-grid">
-                            <a href="https://openrouter.ai/usage" target="_blank" rel="noopener" class="provider-link-card">
-                                <span class="provider-link-name">OpenRouter</span>
-                                <span class="provider-link-url">openrouter.ai/usage</span>
-                            </a>
-                            <a href="https://platform.openai.com/usage" target="_blank" rel="noopener" class="provider-link-card">
-                                <span class="provider-link-name">OpenAI</span>
-                                <span class="provider-link-url">platform.openai.com/usage</span>
-                            </a>
-                            <a href="https://stablehorde.net" target="_blank" rel="noopener" class="provider-link-card">
-                                <span class="provider-link-name">AI Horde</span>
-                                <span class="provider-link-url">stablehorde.net</span>
-                            </a>
-                        </div>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="card-header"><h3>Quick Actions</h3></div>
-                    <div class="card-body">
-                        <div class="quick-actions-grid">
-                            <button id="action-sync-commands" class="btn btn-secondary">Sync Discord Commands</button>
-                        </div>
-                    </div>
-                </div>
-            </section>
+        <div class="main-col">
+            <header class="topbar">
+                <button type="button" id="sidebar-open" class="icon-btn sidebar-open" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">
+                    <svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg>
+                </button>
+                <h1 id="page-title" class="page-title">Overview</h1>
+                <div class="topbar-spacer"></div>
+                <button type="button" id="global-search" class="search-trigger" aria-label="Open command palette" aria-haspopup="dialog">
+                    <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+                    <span class="search-trigger-text">Search or jump to...</span>
+                    <kbd class="kbd" id="palette-hint">Ctrl K</kbd>
+                </button>
+                <span id="ws-chip" class="status-chip" data-state="offline" role="status" title="Live updates connection">
+                    <span class="status-dot"></span><span class="status-chip-text">Offline</span>
+                </span>
+                <button type="button" id="theme-toggle" class="icon-btn" aria-label="Switch to light theme" title="Switch to light theme">
+                    <svg class="icon icon-theme-moon" aria-hidden="true"><use href="#i-moon"/></svg>
+                    <svg class="icon icon-theme-sun" aria-hidden="true"><use href="#i-sun"/></svg>
+                </button>
+                <button type="button" id="logout-btn" class="icon-btn" aria-label="Sign out" title="Sign out">
+                    <svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg>
+                </button>
+            </header>
 
-            <!-- API Keys Tab -->
-            <section id="tab-api-keys" class="tab-content">
-                <div class="tab-header">
-                    <h2>API Key Management</h2>
-                    <p class="tab-description">Manage encrypted API keys for all providers. Keys are stored encrypted and never displayed in full.</p>
-                </div>
-
-                <div id="api-keys-status-banner" class="card" style="display:none;">
-                    <div class="card-body">
-                        <p id="api-keys-status-message" class="status-message"></p>
-                    </div>
-                </div>
-
-                <div class="api-keys-toolbar">
-                    <button id="add-key-btn" class="btn btn-primary">Add API Key</button>
-                    <button id="import-env-btn" class="btn btn-secondary">Import from .env</button>
-                    <span id="import-env-status" class="save-status"></span>
-                </div>
-
-                <div id="api-keys-list" class="api-keys-grid">
-                    <p class="loading-text">Loading API keys...</p>
-                </div>
-
-                <!-- Add/Edit Key Modal -->
-                <div id="key-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3 id="key-modal-title">Add API Key</h3>
-                            <button class="modal-close" id="key-modal-close">&times;</button>
+            <main id="main" class="main" tabindex="-1">
+                <!-- Overview -->
+                <section id="tab-overview" class="tab-content active" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Live status of the bot, its providers, and recent problems.</p>
+                        <div class="toolbar-actions">
+                            <span id="overview-updated" class="muted small"></span>
+                            <button type="button" id="overview-refresh" class="btn btn-secondary btn-sm"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
                         </div>
-                        <form id="key-edit-form">
-                            <input type="hidden" id="key-edit-id">
-                            <div class="form-group">
-                                <label for="key-edit-provider">Provider</label>
-                                <select id="key-edit-provider">
-                                    <option value="">Select provider...</option>
-                                    <option value="openrouter">OpenRouter</option>
-                                    <option value="openai">OpenAI</option>
-                                    <option value="ai_horde">AI Horde</option>
-                                    <option value="cloudflare">Cloudflare API Key</option>
-                                    <option value="cloudflare_url">Cloudflare Worker URL</option>
-                                    <option value="comfyui">ComfyUI URL</option>
-                                </select>
+                    </div>
+                    <div id="overview-error" class="form-alert" role="alert" hidden></div>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon tone-blue"><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-guilds">--</div><div class="stat-label">Servers</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon tone-violet"><svg class="icon" aria-hidden="true"><use href="#i-message"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-messages">--</div><div class="stat-label">Stored messages</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon tone-green"><svg class="icon" aria-hidden="true"><use href="#i-threads"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-threads">--</div><div class="stat-label">Active threads</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon tone-amber"><svg class="icon" aria-hidden="true"><use href="#i-hash"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-channels">--</div><div class="stat-label">Custom channels</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon tone-cyan"><svg class="icon" aria-hidden="true"><use href="#i-zap"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-latency">--</div><div class="stat-label">Latency (ms)</div></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon tone-rose"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg></div>
+                            <div class="stat-body"><div class="stat-value" id="stat-uptime">--</div><div class="stat-label">Bot uptime</div></div>
+                        </div>
+                    </div>
+
+                    <div class="grid-3">
+                        <div class="card" id="health-providers-card">
+                            <div class="card-header"><h2 class="card-title">Providers</h2></div>
+                            <div class="card-body" id="health-providers"><span class="skeleton sk-row"></span></div>
+                        </div>
+                        <div class="card" id="health-keys-card">
+                            <div class="card-header"><h2 class="card-title">API keys</h2></div>
+                            <div class="card-body" id="health-keys"><span class="skeleton sk-row"></span></div>
+                        </div>
+                        <div class="card" id="health-errors-card">
+                            <div class="card-header"><h2 class="card-title">Errors (24h)</h2></div>
+                            <div class="card-body" id="health-errors"><span class="skeleton sk-row"></span></div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="card">
+                            <div class="card-header"><h2 class="card-title">Bot information</h2></div>
+                            <div class="card-body">
+                                <dl class="info-list">
+                                    <div class="info-row"><dt>Bot name</dt><dd id="info-bot-name">--</dd></div>
+                                    <div class="info-row"><dt>Bot ID</dt><dd id="info-bot-id" class="mono">--</dd></div>
+                                    <div class="info-row"><dt>Global model</dt><dd id="info-model" class="mono">--</dd></div>
+                                    <div class="info-row"><dt>Global provider</dt><dd id="info-provider">--</dd></div>
+                                    <div class="info-row"><dt>Database size</dt><dd id="info-db-size">--</dd></div>
+                                </dl>
                             </div>
-                            <div class="form-group">
-                                <label for="key-edit-value">API Key / URL</label>
-                                <input type="password" id="key-edit-value" placeholder="Enter API key or URL" autocomplete="off">
-                            </div>
-                            <div class="form-group">
-                                <label for="key-edit-alias">Alias (optional)</label>
-                                <input type="text" id="key-edit-alias" placeholder="e.g., Production Key">
-                            </div>
-                            <div id="key-validation-result" class="save-status"></div>
-                            <div class="modal-actions">
-                                <button type="submit" class="btn btn-primary">Save Key</button>
-                                <button type="button" class="btn btn-secondary" id="key-test-btn">Test Key</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card" style="margin-top:var(--space-4);">
-                    <div class="card-header"><h3>Audit Log</h3></div>
-                    <div class="card-body">
-                        <div id="audit-log-container" class="table-container">
-                            <p class="loading-text">Loading audit log...</p>
                         </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Settings Tab -->
-            <section id="tab-settings" class="tab-content">
-                <div class="tab-header">
-                    <h2>Global Settings</h2>
-                </div>
-                <div class="card">
-                    <div class="card-header"><h3>AI Configuration</h3></div>
-                    <div class="card-body">
-                        <form id="settings-form">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="setting-provider">AI Provider</label>
-                                    <select id="setting-provider">
-                                        <option value="openrouter">OpenRouter</option>
-                                        <option value="openai">OpenAI</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="setting-memory">History Limit (1-100)</label>
-                                    <input type="number" id="setting-memory" min="1" max="100">
+                        <div class="stack">
+                            <div class="card">
+                                <div class="card-header"><h2 class="card-title">Quick actions</h2></div>
+                                <div class="card-body">
+                                    <div class="quick-actions">
+                                        <button type="button" id="action-sync-commands" class="btn btn-secondary"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Sync Discord commands</button>
+                                    </div>
+                                    <p id="sync-commands-status" class="save-status" role="status" aria-live="polite"></p>
                                 </div>
                             </div>
-                            <div class="form-group">
-                                <label for="setting-model">Global Model</label>
-                                <div class="model-select-wrapper">
-                                    <input type="text" id="setting-model-search" class="model-search" placeholder="Type to filter models..." autocomplete="off">
-                                    <select id="setting-model" size="8" class="model-select">
-                                        <option value="">Loading models...</option>
-                                    </select>
+                            <div class="card">
+                                <div class="card-header"><h2 class="card-title">Provider usage dashboards</h2></div>
+                                <div class="card-body">
+                                    <div class="provider-links-grid">
+                                        <a href="https://openrouter.ai/usage" target="_blank" rel="noopener" class="provider-link-card"><span class="provider-link-name">OpenRouter</span><span class="provider-link-url">openrouter.ai/usage</span></a>
+                                        <a href="https://platform.openai.com/usage" target="_blank" rel="noopener" class="provider-link-card"><span class="provider-link-name">OpenAI</span><span class="provider-link-url">platform.openai.com/usage</span></a>
+                                        <a href="https://stablehorde.net" target="_blank" rel="noopener" class="provider-link-card"><span class="provider-link-name">AI Horde</span><span class="provider-link-url">stablehorde.net</span></a>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="setting-window">Time Window (hours)</label>
-                                    <input type="number" id="setting-window" min="1" max="96">
-                                </div>
-                                <div class="form-group">
-                                    <label for="setting-prune">Prune Frequency (hours)</label>
-                                    <input type="number" id="setting-prune" min="1" max="168">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="setting-system-prompt">System Prompt</label>
-                                <textarea id="setting-system-prompt" rows="4"></textarea>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Settings</button>
-                                <span id="settings-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-header"><h3>Memory System</h3></div>
-                    <div class="card-body">
-                        <form id="memory-settings-form">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="setting-session-timeout">Session Timeout (hours, 1–168)</label>
-                                    <input type="number" id="setting-session-timeout" min="1" max="168">
-                                    <small class="form-hint">If a channel is silent for this many hours, Gideon starts a fresh session.</small>
-                                </div>
-                                <div class="form-group">
-                                    <label for="setting-max-summaries">Max Memory Summaries per Channel</label>
-                                    <input type="number" id="setting-max-summaries" min="1" max="50">
-                                    <small class="form-hint">Oldest summaries are pruned when this limit is exceeded.</small>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="setting-memory-summary">Auto-Summarize on Session End</label>
-                                <select id="setting-memory-summary">
-                                    <option value="true">Enabled — summarize conversation before clearing</option>
-                                    <option value="false">Disabled — just clear history silently</option>
-                                </select>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Memory Settings</button>
-                                <span id="memory-settings-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <hr class="section-divider">
-
-                <div class="card">
-                    <div class="card-header"><h3>Tool Calling</h3></div>
-                    <div class="card-body">
-                        <form id="tool-calling-form">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Tool Calling</label>
-                                    <label class="toggle-switch">
-                                        <input type="checkbox" id="tool-calling-enabled" checked>
-                                        <span class="toggle-track">
-                                            <span class="toggle-thumb"></span>
-                                        </span>
-                                        <span id="tool-calling-enabled-label">Enabled — native tool calling via LLM</span>
-                                    </label>
-                                </div>
-                                <div class="form-group">
-                                    <label for="tool-calling-max-iterations">Max Iterations (1–10)</label>
-                                    <input type="number" id="tool-calling-max-iterations" min="1" max="10" value="3">
-                                    <small class="form-hint">Maximum round-trips between tool calls and the LLM before forcing a text response.</small>
-                                </div>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Tool Calling Settings</button>
-                                <span id="tool-calling-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Channels Tab -->
-            <section id="tab-channels" class="tab-content">
-                <div class="tab-header">
-                    <h2>Channel Configurations</h2>
-                    <p class="tab-description">All channels across all servers. Set per-channel model, provider, or system prompt overrides.</p>
-                </div>
-                <div class="channels-filters">
-                    <div class="filter-group">
-                        <label for="channel-filter-input">Search</label>
-                        <input type="text" id="channel-filter-input" placeholder="Filter by name, server, model..." autocomplete="off" oninput="window._filterChannels()">
-                    </div>
-                    <div class="filter-group">
-                        <label for="channel-filter-override">Status</label>
-                        <select id="channel-filter-override" onchange="window._filterChannels()">
-                            <option value="all">All Channels</option>
-                            <option value="customized">Customized Only</option>
-                            <option value="default">Global Default Only</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="channels-list" class="table-container">
-                    <p class="loading-text">Loading channels...</p>
-                </div>
-
-                <!-- Channel Editor Modal -->
-                <div id="channel-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Edit Channel: <span id="channel-modal-name">--</span></h3>
-                            <button class="modal-close" id="channel-modal-close">&times;</button>
-                        </div>
-                        <form id="channel-edit-form">
-                            <input type="hidden" id="channel-edit-id">
-                            <div class="form-group">
-                                <label for="channel-edit-model">Model Override (select none for global default)</label>
-                                <div class="model-select-wrapper">
-                                    <input type="text" id="channel-model-search" class="model-search" placeholder="Type to filter models..." autocomplete="off">
-                                    <select id="channel-edit-model" size="6" class="model-select">
-                                        <option value="">Use Global Default</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="channel-edit-provider">Provider Override</label>
-                                <select id="channel-edit-provider">
-                                    <option value="">Use Global Default</option>
-                                    <option value="openrouter">OpenRouter</option>
-                                    <option value="openai">OpenAI</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="channel-edit-prompt">System Prompt Override</label>
-                                <textarea id="channel-edit-prompt" rows="3" placeholder="Leave blank for global default"></textarea>
-                            </div>
-                            <div class="modal-actions">
-                                <button type="submit" class="btn btn-primary">Save</button>
-                                <button type="button" class="btn btn-danger" id="channel-reset-btn">Reset to Defaults</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Threads Tab -->
-            <section id="tab-threads" class="tab-content">
-                <div class="tab-header">
-                    <h2>Thread Management</h2>
-                    <p class="tab-description">Active AI conversation threads and their configurations.</p>
-                </div>
-                <div id="threads-list" class="table-container">
-                    <p class="loading-text">Loading threads...</p>
-                </div>
-
-                <!-- Thread Editor Modal -->
-                <div id="thread-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Edit Thread: <span id="thread-modal-name">--</span></h3>
-                            <button class="modal-close" id="thread-modal-close">&times;</button>
-                        </div>
-                        <form id="thread-edit-form">
-                            <input type="hidden" id="thread-edit-id">
-                            <div class="form-group">
-                                <label for="thread-edit-name">Thread Name</label>
-                                <input type="text" id="thread-edit-name">
-                            </div>
-                            <div class="form-group">
-                                <label for="thread-edit-model">Model Override</label>
-                                <div class="model-select-wrapper">
-                                    <input type="text" id="thread-model-search" class="model-search" placeholder="Type to filter models..." autocomplete="off">
-                                    <select id="thread-edit-model" size="6" class="model-select">
-                                        <option value="">Use Channel/Global Default</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="thread-edit-prompt">System Prompt Override</label>
-                                <textarea id="thread-edit-prompt" rows="3" placeholder="Leave blank for channel/global default"></textarea>
-                            </div>
-                            <div class="modal-actions">
-                                <button type="submit" class="btn btn-primary">Save</button>
-                                <button type="button" class="btn btn-danger" id="thread-delete-btn">Delete Thread</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Personas Tab -->
-            <section id="tab-personas" class="tab-content">
-                <div class="tab-header">
-                    <h2>Per-Channel Personas</h2>
-                    <p class="tab-description">Configure unique identities per channel using Discord webhooks. Each persona has its own display name, avatar, and system prompt.</p>
-                </div>
-
-                <!-- Persona Templates -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Persona Templates</h3>
-                        <button class="btn btn-primary btn-small" id="create-template-btn">Create Template</button>
-                    </div>
-                    <div id="persona-templates-grid" class="persona-templates-grid">
-                        <p class="loading-text">Loading templates...</p>
-                    </div>
-                </div>
-
-                <!-- Channel Personas -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Channel Personas</h3>
-                    </div>
-                    <div id="channel-personas-list" class="table-container">
-                        <p class="loading-text">Loading channel personas...</p>
-                    </div>
-                </div>
-
-                <!-- Persona Editor Modal -->
-                <div id="persona-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3 id="persona-modal-title">Edit Persona</h3>
-                            <button class="modal-close" id="persona-modal-close">&times;</button>
-                        </div>
-                        <form id="persona-edit-form">
-                            <input type="hidden" id="persona-edit-channel-id">
-                            <div class="form-group">
-                                <label for="persona-edit-display-name">Display Name *</label>
-                                <input type="text" id="persona-edit-display-name" placeholder="e.g. TechBot, Muse, Professor" required maxlength="80">
-                            </div>
-                            <div class="form-group">
-                                <label for="persona-edit-avatar-url">Avatar URL</label>
-                                <div class="avatar-preview-row">
-                                    <input type="text" id="persona-edit-avatar-url" placeholder="https://example.com/avatar.png">
-                                    <img id="persona-avatar-preview" class="persona-avatar-preview" style="display:none;" alt="Preview">
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label for="persona-edit-system-prompt">System Prompt</label>
-                                <textarea id="persona-edit-system-prompt" rows="4" placeholder="Custom personality and behavior for this persona"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="persona-edit-model">Model Override</label>
-                                <input type="text" id="persona-edit-model" placeholder="Leave blank for channel/global default">
-                            </div>
-                            <div class="form-group">
-                                <label for="persona-edit-provider">Provider Override</label>
-                                <select id="persona-edit-provider">
-                                    <option value="">Use Default</option>
-                                    <option value="openrouter">OpenRouter</option>
-                                    <option value="openai">OpenAI</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="persona-edit-template">Apply Template</label>
-                                <select id="persona-edit-template">
-                                    <option value="">Custom (no template)</option>
-                                </select>
-                            </div>
-                            <div class="modal-actions">
-                                <button type="submit" class="btn btn-primary">Save Persona</button>
-                                <button type="button" class="btn btn-danger" id="persona-remove-btn">Remove Persona</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Channel Picker Modal (for Apply Template) -->
-                <div id="channel-picker-modal" class="modal" style="display:none;">
-                    <div class="modal-content" style="max-width:480px;">
-                        <div class="modal-header">
-                            <h3 id="channel-picker-title">Select Channel</h3>
-                            <button class="modal-close" id="channel-picker-close">&times;</button>
-                        </div>
-                        <div class="form-group">
-                            <label for="channel-picker-search">Search channels</label>
-                            <input type="text" id="channel-picker-search" placeholder="Type to filter by name or server..." autocomplete="off">
-                        </div>
-                        <div id="channel-picker-list" class="channel-picker-list">
-                            <p class="loading-text">Loading channels...</p>
                         </div>
                     </div>
-                </div>
 
-                <!-- Template Editor Modal -->
-                <div id="template-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3 id="template-modal-title">Create Template</h3>
-                            <button class="modal-close" id="template-modal-close">&times;</button>
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title">Recent errors</h2>
+                            <span class="muted small">Latest 10 from the bot log</span>
                         </div>
-                        <form id="template-edit-form">
-                            <input type="hidden" id="template-edit-id">
-                            <div class="form-group">
-                                <label for="template-edit-name">Template Name *</label>
-                                <input type="text" id="template-edit-name" placeholder="e.g. Tech Guru" required>
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-display-name">Display Name *</label>
-                                <input type="text" id="template-edit-display-name" placeholder="e.g. TechBot" required maxlength="80">
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-avatar-url">Avatar URL</label>
-                                <input type="text" id="template-edit-avatar-url" placeholder="https://example.com/avatar.png">
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-description">Description</label>
-                                <input type="text" id="template-edit-description" placeholder="Short description of this persona">
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-system-prompt">System Prompt</label>
-                                <textarea id="template-edit-system-prompt" rows="4" placeholder="Personality and behavior instructions"></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-model">Model</label>
-                                <input type="text" id="template-edit-model" placeholder="Leave blank for default">
-                            </div>
-                            <div class="form-group">
-                                <label for="template-edit-provider">Provider</label>
-                                <select id="template-edit-provider">
-                                    <option value="">Default</option>
-                                    <option value="openrouter">OpenRouter</option>
-                                    <option value="openai">OpenAI</option>
-                                </select>
-                            </div>
-                            <div class="modal-actions">
-                                <button type="submit" class="btn btn-primary">Save Template</button>
-                                <button type="button" class="btn btn-danger" id="template-delete-btn" style="display:none;">Delete Template</button>
-                            </div>
-                        </form>
+                        <div class="card-body flush" id="recent-errors"><div class="pad"><span class="skeleton sk-row"></span></div></div>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <!-- Image Generation Tab -->
-            <section id="tab-image-gen" class="tab-content">
-                <div class="tab-header">
-                    <h2>Image Generation</h2>
-                    <p class="tab-description">Configure the /dream command, image providers, and generation settings.</p>
-                </div>
-
-                <!-- Active Provider -->
-                <div class="card">
-                    <div class="card-header"><h3>Active Provider</h3></div>
-                    <div class="card-body">
-                        <form id="image-provider-form">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="image-active-provider">Image Provider</label>
-                                    <select id="image-active-provider">
-                                        <option value="ai_horde">AI Horde</option>
-                                        <option value="cloudflare">Cloudflare</option>
-                                        <option value="openai">OpenAI (DALL-E)</option>
-                                        <option value="comfyui">ComfyUI</option>
-                                        <option value="openrouter">OpenRouter</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Available</label>
-                                    <div id="image-available-providers" class="provider-badges"></div>
-                                </div>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Provider</button>
-                                <span id="image-provider-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- OpenRouter Modalities -->
-                <div class="card" id="openrouter-modalities-card">
-                    <div class="card-header"><h3>OpenRouter Modalities</h3></div>
-                    <div class="card-body">
-                        <p class="tab-description" style="margin-bottom:16px;">
-                            Controls the <code class="code">modalities</code> array sent in OpenRouter API requests.
-                            Some model providers on OpenRouter don't support all modality combinations.
-                            Adjust these if you encounter errors with specific models.
-                        </p>
-                        <form id="modalities-form">
-                            <div class="form-group">
-                                <label>Output Modalities</label>
-                                <div class="modality-checkboxes">
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" id="mod-image" value="image" checked>
-                                        <span>image</span>
-                                    </label>
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" id="mod-text" value="text" checked>
-                                        <span>text</span>
-                                    </label>
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" id="mod-audio" value="audio">
-                                        <span>audio</span>
-                                    </label>
-                                </div>
-                                <div class="modality-preview">
-                                    Current: <code class="code" id="modalities-preview">["image", "text"]</code>
-                                </div>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Modalities</button>
-                                <span id="modalities-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Provider Config -->
-                <div class="card">
-                    <div class="card-header"><h3>Provider Configuration</h3></div>
-                    <div class="card-body">
-                        <div class="form-group">
-                            <label for="image-config-provider">Configure Provider</label>
-                            <select id="image-config-provider">
-                                <option value="ai_horde">AI Horde</option>
-                                <option value="cloudflare">Cloudflare</option>
-                                <option value="openai">OpenAI (DALL-E)</option>
-                                <option value="comfyui">ComfyUI</option>
-                                <option value="openrouter">OpenRouter</option>
-                            </select>
+                <!-- API Keys -->
+                <section id="tab-api-keys" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Manage encrypted API keys for all providers. Keys are stored encrypted and never displayed in full.</p>
+                        <div class="toolbar-actions">
+                            <span id="import-env-status" class="save-status" role="status" aria-live="polite"></span>
+                            <button type="button" id="import-env-btn" class="btn btn-secondary btn-sm"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>Import from .env</button>
+                            <button type="button" id="add-key-btn" class="btn btn-primary btn-sm"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add API key</button>
                         </div>
+                    </div>
 
-                        <!-- AI Horde Config -->
-                        <div id="config-ai_horde" class="provider-config-panel">
-                            <form id="config-form-ai_horde">
+                    <div id="api-keys-status-banner" class="form-alert is-warning" role="status" hidden>
+                        <span id="api-keys-status-message"></span>
+                    </div>
+
+                    <div id="api-keys-list" class="key-grid"></div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Audit log</h2></div>
+                        <div class="card-body flush">
+                            <div id="audit-log-container" class="table-wrap"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Settings -->
+                <section id="tab-settings" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Global defaults. Channels, threads and personas can override most of these.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">AI configuration</h2></div>
+                        <div class="card-body">
+                            <form id="settings-form" novalidate>
                                 <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="horde-model">Model</label>
-                                        <input type="text" id="horde-model" placeholder="stable_diffusion_xl">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="horde-size">Size</label>
-                                        <select id="horde-size">
-                                            <option value="512x512">512x512</option>
-                                            <option value="768x768">768x768</option>
-                                            <option value="1024x1024">1024x1024</option>
-                                            <option value="512x768">512x768</option>
-                                            <option value="768x512">768x512</option>
-                                            <option value="1024x768">1024x768</option>
-                                            <option value="768x1024">768x1024</option>
+                                    <div class="field">
+                                        <label for="setting-provider">AI provider</label>
+                                        <select id="setting-provider">
+                                            <option value="openrouter">OpenRouter</option>
+                                            <option value="openai">OpenAI</option>
                                         </select>
                                     </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="horde-steps">Steps (10-100)</label>
-                                    <input type="number" id="horde-steps" min="10" max="100" value="30">
-                                </div>
-                                <div class="form-actions">
-                                    <button type="submit" class="btn btn-primary">Save AI Horde Config</button>
-                                    <span id="config-save-ai_horde" class="save-status"></span>
-                                </div>
-                            </form>
-                        </div>
-
-                        <!-- Cloudflare Config -->
-                        <div id="config-cloudflare" class="provider-config-panel" style="display:none;">
-                            <form id="config-form-cloudflare">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="cf-size">Size</label>
-                                        <select id="cf-size">
-                                            <option value="256x256">256x256</option>
-                                            <option value="512x512">512x512</option>
-                                            <option value="768x768">768x768</option>
-                                            <option value="1024x1024">1024x1024</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="cf-steps">Steps (10-50)</label>
-                                        <input type="number" id="cf-steps" min="10" max="50" value="25">
+                                    <div class="field">
+                                        <label for="setting-memory">History limit (1-100)</label>
+                                        <input type="number" id="setting-memory" min="1" max="100">
                                     </div>
                                 </div>
-                                <div class="form-actions">
-                                    <button type="submit" class="btn btn-primary">Save Cloudflare Config</button>
-                                    <span id="config-save-cloudflare" class="save-status"></span>
-                                </div>
-                            </form>
-                        </div>
-
-                        <!-- OpenAI Config -->
-                        <div id="config-openai" class="provider-config-panel" style="display:none;">
-                            <form id="config-form-openai">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="oai-model">Model</label>
-                                        <select id="oai-model">
-                                            <option value="dall-e-3">DALL-E 3</option>
-                                            <option value="dall-e-2">DALL-E 2</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="oai-quality">Quality</label>
-                                        <select id="oai-quality">
-                                            <option value="standard">Standard</option>
-                                            <option value="hd">HD</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="oai-style">Style</label>
-                                    <select id="oai-style">
-                                        <option value="vivid">Vivid</option>
-                                        <option value="natural">Natural</option>
-                                    </select>
-                                </div>
-                                <div class="form-actions">
-                                    <button type="submit" class="btn btn-primary">Save OpenAI Config</button>
-                                    <span id="config-save-openai" class="save-status"></span>
-                                </div>
-                            </form>
-                        </div>
-
-                        <!-- ComfyUI Config -->
-                        <div id="config-comfyui" class="provider-config-panel" style="display:none;">
-                            <form id="config-form-comfyui">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="comfy-model">Model (checkpoint name)</label>
-                                        <input type="text" id="comfy-model" placeholder="Server default">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="comfy-size">Size</label>
-                                        <select id="comfy-size">
-                                            <option value="512x512">512x512</option>
-                                            <option value="768x768">768x768</option>
-                                            <option value="1024x1024">1024x1024</option>
-                                            <option value="512x768">512x768</option>
-                                            <option value="768x512">768x512</option>
-                                        </select>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="comfy-steps">Steps (10-150)</label>
-                                    <input type="number" id="comfy-steps" min="10" max="150" value="20">
-                                </div>
-                                <div class="form-actions">
-                                    <button type="submit" class="btn btn-primary">Save ComfyUI Config</button>
-                                    <span id="config-save-comfyui" class="save-status"></span>
-                                </div>
-                            </form>
-                        </div>
-
-                        <!-- OpenRouter Config -->
-                        <div id="config-openrouter" class="provider-config-panel" style="display:none;">
-                            <form id="config-form-openrouter">
-                                <div class="form-group">
-                                    <label for="or-model">Model</label>
-                                    <div class="model-select-wrapper">
-                                        <input type="text" id="or-model-search" class="model-search" placeholder="Type to filter image models..." autocomplete="off">
-                                        <select id="or-model" size="6" class="model-select">
+                                <div class="field">
+                                    <label for="setting-model">Global model</label>
+                                    <div class="model-picker">
+                                        <input type="text" id="setting-model-search" class="model-search" placeholder="Filter models..." autocomplete="off" aria-label="Filter models" data-ignore-dirty>
+                                        <select id="setting-model" size="8" class="model-select">
                                             <option value="">Loading models...</option>
                                         </select>
                                     </div>
                                 </div>
                                 <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="or-aspect">Aspect Ratio</label>
-                                        <select id="or-aspect">
-                                            <option value="1:1">Square (1:1)</option>
-                                            <option value="16:9">Landscape (16:9)</option>
-                                            <option value="9:16">Portrait (9:16)</option>
-                                            <option value="4:3">Landscape (4:3)</option>
-                                            <option value="3:4">Portrait (3:4)</option>
-                                        </select>
+                                    <div class="field">
+                                        <label for="setting-window">Time window (hours, 1-96)</label>
+                                        <input type="number" id="setting-window" min="1" max="96">
                                     </div>
-                                    <div class="form-group">
-                                        <label for="or-image-size">Image Size</label>
-                                        <select id="or-image-size">
-                                            <option value="1K">1K (1024px)</option>
-                                            <option value="2K">2K (2048px)</option>
-                                            <option value="4K">4K (4096px)</option>
-                                        </select>
+                                    <div class="field">
+                                        <label for="setting-prune">Prune frequency (hours, 1-168)</label>
+                                        <input type="number" id="setting-prune" min="1" max="168">
                                     </div>
                                 </div>
+                                <div class="field">
+                                    <label for="setting-system-prompt">System prompt</label>
+                                    <textarea id="setting-system-prompt" rows="4"></textarea>
+                                </div>
                                 <div class="form-actions">
-                                    <button type="submit" class="btn btn-primary">Save OpenRouter Config</button>
-                                    <span id="config-save-openrouter" class="save-status"></span>
+                                    <button type="submit" class="btn btn-primary">Save settings</button>
+                                    <span id="settings-save-status" class="save-status" role="status" aria-live="polite"></span>
                                 </div>
                             </form>
                         </div>
                     </div>
-                </div>
-            </section>
 
-            <!-- Video Generation Tab -->
-            <section id="tab-video-gen" class="tab-content">
-                <div class="tab-header">
-                    <h2>Video Generation</h2>
-                    <p class="tab-description">Configure the /video command and generate videos directly via OpenRouter's video generation API.</p>
-                </div>
-
-                <!-- Status -->
-                <div class="card">
-                    <div class="card-header"><h3>Backend Status</h3></div>
-                    <div class="card-body">
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Provider</label>
-                                <div><span class="provider-badge available">openrouter</span></div>
-                            </div>
-                            <div class="form-group">
-                                <label>API Key</label>
-                                <div id="video-availability" class="provider-badges"></div>
-                            </div>
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Memory system</h2></div>
+                        <div class="card-body">
+                            <form id="memory-settings-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-session-timeout">Session timeout (hours, 1-168)</label>
+                                        <input type="number" id="setting-session-timeout" min="1" max="168">
+                                        <small class="field-hint">If a channel is silent for this many hours, Gideon starts a fresh session.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-max-summaries">Max memory summaries per channel</label>
+                                        <input type="number" id="setting-max-summaries" min="1" max="50">
+                                        <small class="field-hint">Oldest summaries are pruned when this limit is exceeded.</small>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="setting-memory-summary">Auto-summarize on session end</label>
+                                    <select id="setting-memory-summary">
+                                        <option value="true">Enabled - summarize conversation before clearing</option>
+                                        <option value="false">Disabled - just clear history silently</option>
+                                    </select>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save memory settings</button>
+                                    <span id="memory-settings-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
                         </div>
                     </div>
-                </div>
 
-                <!-- Defaults -->
-                <div class="card">
-                    <div class="card-header"><h3>Default Configuration</h3></div>
-                    <div class="card-body">
-                        <p class="tab-description" style="margin-bottom:16px;">
-                            These defaults are used when /video is invoked without explicit options.
-                        </p>
-                        <form id="video-config-form">
-                            <div class="form-group">
-                                <label for="video-model">Model</label>
-                                <div class="model-select-wrapper">
-                                    <input type="text" id="video-model-search" class="model-search" placeholder="Type to filter video models..." autocomplete="off">
-                                    <select id="video-model" size="6" class="model-select">
-                                        <option value="">Loading models...</option>
-                                    </select>
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Tool calling</h2></div>
+                        <div class="card-body">
+                            <form id="tool-calling-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <span class="field-label" id="tool-calling-label">Tool calling</span>
+                                        <label class="toggle-switch" for="tool-calling-enabled">
+                                            <input type="checkbox" id="tool-calling-enabled" checked aria-describedby="tool-calling-enabled-label">
+                                            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                                            <span id="tool-calling-enabled-label">Enabled - native tool calling via LLM</span>
+                                        </label>
+                                    </div>
+                                    <div class="field">
+                                        <label for="tool-calling-max-iterations">Max iterations (1-10)</label>
+                                        <input type="number" id="tool-calling-max-iterations" min="1" max="10" value="3">
+                                        <small class="field-hint">Maximum round-trips between tool calls and the LLM before forcing a text response.</small>
+                                    </div>
                                 </div>
-                                <div id="video-model-info" class="tab-description" style="margin-top:8px;"></div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="video-duration">Duration (seconds)</label>
-                                    <select id="video-duration">
-                                        <option value="4">4</option>
-                                        <option value="5">5</option>
-                                        <option value="6">6</option>
-                                        <option value="8" selected>8</option>
-                                        <option value="10">10</option>
-                                        <option value="12">12</option>
-                                        <option value="15">15</option>
-                                        <option value="20">20</option>
-                                    </select>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save tool calling settings</button>
+                                    <span id="tool-calling-save-status" class="save-status" role="status" aria-live="polite"></span>
                                 </div>
-                                <div class="form-group">
-                                    <label for="video-aspect">Aspect Ratio</label>
-                                    <select id="video-aspect">
-                                        <option value="16:9" selected>Landscape (16:9)</option>
-                                        <option value="9:16">Portrait (9:16)</option>
-                                        <option value="1:1">Square (1:1)</option>
-                                        <option value="4:3">Landscape (4:3)</option>
-                                        <option value="3:4">Portrait (3:4)</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="video-resolution">Resolution</label>
-                                    <select id="video-resolution">
-                                        <option value="480p">480p</option>
-                                        <option value="720p" selected>720p (HD)</option>
-                                        <option value="1080p">1080p (Full HD)</option>
-                                        <option value="2K">2K</option>
-                                        <option value="4K">4K</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label class="checkbox-label">
-                                    <input type="checkbox" id="video-audio" checked>
-                                    <span>Generate audio (model-dependent)</span>
-                                </label>
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Defaults</button>
-                                <span id="video-config-save-status" class="save-status"></span>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Test Generation -->
-                <div class="card">
-                    <div class="card-header"><h3>Test Generation</h3></div>
-                    <div class="card-body">
-                        <p class="tab-description" style="margin-bottom:16px;">
-                            Submit a test job using the saved defaults. Generation typically takes 30 seconds to several minutes.
-                        </p>
-                        <form id="video-test-form">
-                            <div class="form-group">
-                                <label for="video-test-prompt">Prompt</label>
-                                <textarea id="video-test-prompt" rows="3" placeholder="Describe the video..."></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label for="video-test-image">Reference Image URL (optional)</label>
-                                <input type="text" id="video-test-image" placeholder="https://... (image-to-video; model-dependent)">
-                            </div>
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Generate Video</button>
-                                <button type="button" id="video-test-cancel" class="btn btn-secondary" style="display:none;">Stop Polling</button>
-                                <span id="video-test-status" class="save-status"></span>
-                            </div>
-                        </form>
-                        <div id="video-test-result" style="margin-top:16px;"></div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Memory Tab -->
-            <section id="tab-memory" class="tab-content">
-                <div class="tab-header">
-                    <h2>Channel Memory</h2>
-                    <p class="tab-description">Long-term AI-generated summaries of past conversations, stored per channel.</p>
-                </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Memory Overview</h3>
-                        <button class="btn btn-secondary btn-small" onclick="window.loadMemoryStats()">Refresh</button>
-                    </div>
-                    <div class="card-body">
-                        <div id="memory-stats-list">
-                            <p class="text-muted">Loading...</p>
+                            </form>
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <div class="card" id="memory-channel-card" style="display:none">
-                    <div class="card-header">
-                        <h3 id="memory-channel-title">Channel Memories</h3>
-                        <div class="card-actions">
-                            <button class="btn btn-secondary btn-small" id="memory-summarize-btn">Summarize &amp; Rotate Now</button>
-                            <button class="btn btn-danger btn-small" id="memory-clear-btn">Clear All Memories</button>
+                <!-- Channels -->
+                <section id="tab-channels" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">All channels across all servers. Set per-channel model, provider, prompt or memory overrides.</p>
+                    </div>
+                    <div class="filter-bar">
+                        <div class="field">
+                            <label for="channel-filter-input">Search</label>
+                            <input type="search" id="channel-filter-input" placeholder="Filter by name, server, model..." autocomplete="off">
                         </div>
-                    </div>
-                    <div class="card-body">
-                        <div id="memory-entries-list"></div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Messages Tab -->
-            <section id="tab-messages" class="tab-content">
-                <div class="tab-header">
-                    <h2>Stored Messages</h2>
-                    <p class="tab-description">Browse conversation history stored in Gideon's database.</p>
-                </div>
-                <div class="messages-controls">
-                    <div class="messages-filters">
-                        <div class="filter-group">
-                            <label for="msg-source-type">Source</label>
-                            <select id="msg-source-type">
-                                <option value="all">All Messages</option>
-                                <option value="channel">By Channel</option>
-                                <option value="thread">By Thread</option>
+                        <div class="field">
+                            <label for="channel-filter-override">Status</label>
+                            <select id="channel-filter-override">
+                                <option value="all">All channels</option>
+                                <option value="customized">Customized only</option>
+                                <option value="default">Global default only</option>
                             </select>
                         </div>
-                        <div class="filter-group" id="msg-source-select-group" style="display:none;">
+                    </div>
+                    <div id="channels-list"></div>
+                </section>
+
+                <!-- Threads -->
+                <section id="tab-threads" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Active AI conversation threads and their configurations.</p>
+                    </div>
+                    <div class="card">
+                        <div class="card-body flush">
+                            <div id="threads-list" class="table-wrap"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Personas -->
+                <section id="tab-personas" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Give channels a unique identity through Discord webhooks: display name, avatar, and system prompt.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title">Persona templates</h2>
+                            <button type="button" class="btn btn-primary btn-sm" id="create-template-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Create template</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="persona-templates-grid" class="template-grid"></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Channel personas</h2></div>
+                        <div class="card-body flush">
+                            <div id="channel-personas-list" class="table-wrap"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Image Generation -->
+                <section id="tab-image-gen" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Configure the /dream command, image providers, and generation settings.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Active provider</h2></div>
+                        <div class="card-body">
+                            <form id="image-provider-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="image-active-provider">Image provider</label>
+                                        <select id="image-active-provider">
+                                            <option value="ai_horde">AI Horde</option>
+                                            <option value="cloudflare">Cloudflare</option>
+                                            <option value="openai">OpenAI (DALL-E)</option>
+                                            <option value="comfyui">ComfyUI</option>
+                                            <option value="openrouter">OpenRouter</option>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <span class="field-label">Available</span>
+                                        <div id="image-available-providers" class="provider-badges"></div>
+                                    </div>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save provider</button>
+                                    <span id="image-provider-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card" id="openrouter-modalities-card">
+                        <div class="card-header"><h2 class="card-title">OpenRouter modalities</h2></div>
+                        <div class="card-body">
+                            <p class="card-note">
+                                Controls the <code class="code">modalities</code> array sent in OpenRouter API requests.
+                                Some model providers on OpenRouter don't support all modality combinations.
+                                Adjust these if you encounter errors with specific models.
+                            </p>
+                            <form id="modalities-form" novalidate>
+                                <div class="field">
+                                    <span class="field-label" id="modalities-label">Output modalities</span>
+                                    <div class="check-row" role="group" aria-labelledby="modalities-label">
+                                        <label class="checkbox-label"><input type="checkbox" id="mod-image" value="image" checked><span>image</span></label>
+                                        <label class="checkbox-label"><input type="checkbox" id="mod-text" value="text" checked><span>text</span></label>
+                                        <label class="checkbox-label"><input type="checkbox" id="mod-audio" value="audio"><span>audio</span></label>
+                                    </div>
+                                    <div class="modality-preview">Current: <code class="code" id="modalities-preview">["image", "text"]</code></div>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save modalities</button>
+                                    <span id="modalities-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Provider configuration</h2></div>
+                        <div class="card-body">
+                            <div class="field">
+                                <label for="image-config-provider">Configure provider</label>
+                                <select id="image-config-provider">
+                                    <option value="ai_horde">AI Horde</option>
+                                    <option value="cloudflare">Cloudflare</option>
+                                    <option value="openai">OpenAI (DALL-E)</option>
+                                    <option value="comfyui">ComfyUI</option>
+                                    <option value="openrouter">OpenRouter</option>
+                                </select>
+                            </div>
+
+                            <div id="config-ai_horde" class="provider-config-panel">
+                                <form id="config-form-ai_horde" novalidate>
+                                    <div class="form-row">
+                                        <div class="field">
+                                            <label for="horde-model">AI Horde model</label>
+                                            <input type="text" id="horde-model" placeholder="stable_diffusion_xl">
+                                        </div>
+                                        <div class="field">
+                                            <label for="horde-size">AI Horde size</label>
+                                            <select id="horde-size">
+                                                <option value="512x512">512x512</option>
+                                                <option value="768x768">768x768</option>
+                                                <option value="1024x1024">1024x1024</option>
+                                                <option value="512x768">512x768</option>
+                                                <option value="768x512">768x512</option>
+                                                <option value="1024x768">1024x768</option>
+                                                <option value="768x1024">768x1024</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="field">
+                                        <label for="horde-steps">AI Horde steps (10-100)</label>
+                                        <input type="number" id="horde-steps" min="10" max="100" value="30">
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="submit" class="btn btn-primary">Save AI Horde config</button>
+                                        <span id="config-save-ai_horde" class="save-status" role="status" aria-live="polite"></span>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div id="config-cloudflare" class="provider-config-panel" hidden>
+                                <form id="config-form-cloudflare" novalidate>
+                                    <div class="form-row">
+                                        <div class="field">
+                                            <label for="cf-size">Cloudflare size</label>
+                                            <select id="cf-size">
+                                                <option value="256x256">256x256</option>
+                                                <option value="512x512">512x512</option>
+                                                <option value="768x768">768x768</option>
+                                                <option value="1024x1024">1024x1024</option>
+                                            </select>
+                                        </div>
+                                        <div class="field">
+                                            <label for="cf-steps">Cloudflare steps (10-50)</label>
+                                            <input type="number" id="cf-steps" min="10" max="50" value="25">
+                                        </div>
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="submit" class="btn btn-primary">Save Cloudflare config</button>
+                                        <span id="config-save-cloudflare" class="save-status" role="status" aria-live="polite"></span>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div id="config-openai" class="provider-config-panel" hidden>
+                                <form id="config-form-openai" novalidate>
+                                    <div class="form-row">
+                                        <div class="field">
+                                            <label for="oai-model">OpenAI image model</label>
+                                            <select id="oai-model">
+                                                <option value="dall-e-3">DALL-E 3</option>
+                                                <option value="dall-e-2">DALL-E 2</option>
+                                            </select>
+                                        </div>
+                                        <div class="field">
+                                            <label for="oai-quality">OpenAI image quality</label>
+                                            <select id="oai-quality">
+                                                <option value="standard">Standard</option>
+                                                <option value="hd">HD</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="field">
+                                        <label for="oai-style">OpenAI image style</label>
+                                        <select id="oai-style">
+                                            <option value="vivid">Vivid</option>
+                                            <option value="natural">Natural</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="submit" class="btn btn-primary">Save OpenAI config</button>
+                                        <span id="config-save-openai" class="save-status" role="status" aria-live="polite"></span>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div id="config-comfyui" class="provider-config-panel" hidden>
+                                <form id="config-form-comfyui" novalidate>
+                                    <div class="form-row">
+                                        <div class="field">
+                                            <label for="comfy-model">ComfyUI model (checkpoint name)</label>
+                                            <input type="text" id="comfy-model" placeholder="Server default">
+                                        </div>
+                                        <div class="field">
+                                            <label for="comfy-size">ComfyUI size</label>
+                                            <select id="comfy-size">
+                                                <option value="512x512">512x512</option>
+                                                <option value="768x768">768x768</option>
+                                                <option value="1024x1024">1024x1024</option>
+                                                <option value="512x768">512x768</option>
+                                                <option value="768x512">768x512</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="field">
+                                        <label for="comfy-steps">ComfyUI steps (10-150)</label>
+                                        <input type="number" id="comfy-steps" min="10" max="150" value="20">
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="submit" class="btn btn-primary">Save ComfyUI config</button>
+                                        <span id="config-save-comfyui" class="save-status" role="status" aria-live="polite"></span>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div id="config-openrouter" class="provider-config-panel" hidden>
+                                <form id="config-form-openrouter" novalidate>
+                                    <div class="field">
+                                        <label for="or-model">OpenRouter image model</label>
+                                        <div class="model-picker">
+                                            <input type="text" id="or-model-search" class="model-search" placeholder="Filter image models..." autocomplete="off" aria-label="Filter image models" data-ignore-dirty>
+                                            <select id="or-model" size="6" class="model-select">
+                                                <option value="">Loading models...</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="field">
+                                            <label for="or-aspect">OpenRouter aspect ratio</label>
+                                            <select id="or-aspect">
+                                                <option value="1:1">Square (1:1)</option>
+                                                <option value="16:9">Landscape (16:9)</option>
+                                                <option value="9:16">Portrait (9:16)</option>
+                                                <option value="4:3">Landscape (4:3)</option>
+                                                <option value="3:4">Portrait (3:4)</option>
+                                            </select>
+                                        </div>
+                                        <div class="field">
+                                            <label for="or-image-size">OpenRouter image size</label>
+                                            <select id="or-image-size">
+                                                <option value="1K">1K (1024px)</option>
+                                                <option value="2K">2K (2048px)</option>
+                                                <option value="4K">4K (4096px)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="form-actions">
+                                        <button type="submit" class="btn btn-primary">Save OpenRouter config</button>
+                                        <span id="config-save-openrouter" class="save-status" role="status" aria-live="polite"></span>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Video Generation -->
+                <section id="tab-video-gen" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Configure the /video command and generate videos directly via OpenRouter's video generation API.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Backend status</h2></div>
+                        <div class="card-body">
+                            <div class="form-row">
+                                <div class="field">
+                                    <span class="field-label">Provider</span>
+                                    <div><span class="provider-badge available">openrouter</span></div>
+                                </div>
+                                <div class="field">
+                                    <span class="field-label">API key</span>
+                                    <div id="video-availability" class="provider-badges"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Default configuration</h2></div>
+                        <div class="card-body">
+                            <p class="card-note">These defaults are used when /video is invoked without explicit options.</p>
+                            <form id="video-config-form" novalidate>
+                                <div class="field">
+                                    <label for="video-model">Video model</label>
+                                    <div class="model-picker">
+                                        <input type="text" id="video-model-search" class="model-search" placeholder="Filter video models..." autocomplete="off" aria-label="Filter video models" data-ignore-dirty>
+                                        <select id="video-model" size="6" class="model-select">
+                                            <option value="">Loading models...</option>
+                                        </select>
+                                    </div>
+                                    <div id="video-model-info" class="field-hint"></div>
+                                </div>
+                                <div class="form-row form-row-3">
+                                    <div class="field">
+                                        <label for="video-duration">Duration (seconds)</label>
+                                        <select id="video-duration">
+                                            <option value="4">4</option>
+                                            <option value="5">5</option>
+                                            <option value="6">6</option>
+                                            <option value="8" selected>8</option>
+                                            <option value="10">10</option>
+                                            <option value="12">12</option>
+                                            <option value="15">15</option>
+                                            <option value="20">20</option>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label for="video-aspect">Video aspect ratio</label>
+                                        <select id="video-aspect">
+                                            <option value="16:9" selected>Landscape (16:9)</option>
+                                            <option value="9:16">Portrait (9:16)</option>
+                                            <option value="1:1">Square (1:1)</option>
+                                            <option value="4:3">Landscape (4:3)</option>
+                                            <option value="3:4">Portrait (3:4)</option>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label for="video-resolution">Video resolution</label>
+                                        <select id="video-resolution">
+                                            <option value="480p">480p</option>
+                                            <option value="720p" selected>720p (HD)</option>
+                                            <option value="1080p">1080p (Full HD)</option>
+                                            <option value="2K">2K</option>
+                                            <option value="4K">4K</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label class="checkbox-label"><input type="checkbox" id="video-audio" checked><span>Generate audio (model-dependent)</span></label>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save defaults</button>
+                                    <span id="video-config-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Test generation</h2></div>
+                        <div class="card-body">
+                            <p class="card-note">Submit a test job using the saved defaults. Generation typically takes 30 seconds to several minutes.</p>
+                            <form id="video-test-form" novalidate>
+                                <div class="field">
+                                    <label for="video-test-prompt">Prompt</label>
+                                    <textarea id="video-test-prompt" rows="3" placeholder="Describe the video..."></textarea>
+                                </div>
+                                <div class="field">
+                                    <label for="video-test-image">Reference image URL (optional)</label>
+                                    <input type="text" id="video-test-image" placeholder="https://... (image-to-video; model-dependent)">
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Generate video</button>
+                                    <button type="button" id="video-test-cancel" class="btn btn-secondary" hidden>Stop polling</button>
+                                    <span id="video-test-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                            <div id="video-test-result" class="video-result"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Memory -->
+                <section id="tab-memory" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Long-term AI-generated summaries of past conversations, stored per channel.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h2 class="card-title">Memory overview</h2>
+                            <button type="button" class="btn btn-secondary btn-sm" data-action="loadMemoryStats"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Refresh</button>
+                        </div>
+                        <div class="card-body flush">
+                            <div id="memory-stats-list" class="table-wrap"></div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="memory-channel-card" hidden>
+                        <div class="card-header">
+                            <h2 class="card-title" id="memory-channel-title">Channel memories</h2>
+                            <div class="card-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="memory-summarize-btn">Summarize &amp; rotate now</button>
+                                <button type="button" class="btn btn-danger btn-sm" id="memory-clear-btn">Clear all memories</button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="memory-entries-list"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Messages -->
+                <section id="tab-messages" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Browse conversation history stored in Gideon's database.</p>
+                    </div>
+                    <div class="filter-bar">
+                        <div class="field">
+                            <label for="msg-source-type">Source</label>
+                            <select id="msg-source-type">
+                                <option value="all">All messages</option>
+                                <option value="channel">By channel</option>
+                                <option value="thread">By thread</option>
+                            </select>
+                        </div>
+                        <div class="field" id="msg-source-select-group" hidden>
                             <label for="msg-source-id">Select</label>
                             <select id="msg-source-id">
                                 <option value="">Loading...</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="field">
                             <label for="msg-role-filter">Role</label>
                             <select id="msg-role-filter">
-                                <option value="">All Roles</option>
+                                <option value="">All roles</option>
                                 <option value="user">User</option>
                                 <option value="assistant">Assistant</option>
                                 <option value="system">System</option>
                                 <option value="tool">Tool</option>
                             </select>
                         </div>
-                        <button id="msg-filter-btn" class="btn btn-primary btn-small">Load</button>
+                        <div class="field field-action">
+                            <button type="button" id="msg-filter-btn" class="btn btn-primary">Load messages</button>
+                        </div>
                     </div>
-                </div>
-                <div id="messages-container" class="messages-viewer">
-                    <div class="empty-state">Select a source and click Load to browse messages.</div>
-                </div>
-                <div id="messages-pagination" class="pagination" style="display:none;">
-                    <button id="msg-prev" class="btn btn-secondary btn-small" disabled>Previous</button>
-                    <span id="msg-page-info" class="page-info">Page 1 of 1</span>
-                    <button id="msg-next" class="btn btn-secondary btn-small" disabled>Next</button>
-                </div>
-            </section>
+                    <div id="messages-container" class="messages-viewer"></div>
+                    <div id="messages-pagination" class="pagination" hidden>
+                        <button type="button" id="msg-prev" class="btn btn-secondary btn-sm" disabled>Previous</button>
+                        <span id="msg-page-info" class="page-info" role="status" aria-live="polite">Page 1 of 1</span>
+                        <button type="button" id="msg-next" class="btn btn-secondary btn-sm" disabled>Next</button>
+                    </div>
+                </section>
 
-            <!-- Diagnostics Tab -->
-            <section id="tab-diagnostics" class="tab-content">
-                <div class="tab-header">
-                    <h2>System Diagnostics</h2>
-                </div>
-                <div class="diagnostics-actions">
-                    <button id="run-diagnostics-btn" class="btn btn-primary">Run Diagnostics</button>
-                    <button id="run-prune-btn" class="btn btn-secondary">Trigger Data Prune</button>
-                </div>
-                <div id="diagnostics-results" class="diagnostics-panel">
-                    <p class="loading-text">Click "Run Diagnostics" to check system health.</p>
-                </div>
-            </section>
+                <!-- Diagnostics -->
+                <section id="tab-diagnostics" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Check bot, database and provider health, or prune old data.</p>
+                        <div class="toolbar-actions">
+                            <button type="button" id="run-prune-btn" class="btn btn-secondary btn-sm">Trigger data prune</button>
+                            <button type="button" id="run-diagnostics-btn" class="btn btn-primary btn-sm"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>Run diagnostics</button>
+                        </div>
+                    </div>
+                    <div id="diagnostics-results" class="diag-grid" aria-live="polite"></div>
+                </section>
 
-            <!-- Backup & Restore Tab -->
-            <section id="tab-backup" class="tab-content">
-                <div class="tab-header">
-                    <h2>Backup & Restore</h2>
-                    <p class="tab-description">Export configurations and database backups, or restore from previous backups.</p>
-                </div>
+                <!-- Backup & Restore -->
+                <section id="tab-backup" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Export configurations and database backups, or restore from previous backups.</p>
+                    </div>
 
-                <!-- Export Section -->
-                <div class="backup-section">
-                    <h3 class="section-title">Export</h3>
-                    <div class="backup-grid">
+                    <h2 class="section-title">Export</h2>
+                    <div class="grid-2">
                         <div class="card">
-                            <div class="card-header"><h3>Configuration (JSON)</h3></div>
+                            <div class="card-header"><h3 class="card-title">Configuration (JSON)</h3></div>
                             <div class="card-body">
                                 <p>Export all global settings, channel configs, persona templates, and user preferences as a human-readable JSON file.</p>
-                                <p class="text-muted">Excludes: messages, threads, API keys, trivia data, reminders.</p>
-                                <button id="export-config-btn" class="btn btn-primary">Download Config JSON</button>
-                                <span id="export-config-status" class="save-status"></span>
+                                <p class="muted small">Excludes: messages, threads, API keys, trivia data, reminders.</p>
+                                <div class="form-actions">
+                                    <button type="button" id="export-config-btn" class="btn btn-primary"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download config JSON</button>
+                                    <span id="export-config-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
                             </div>
                         </div>
                         <div class="card">
-                            <div class="card-header"><h3>Full Database (SQLite)</h3></div>
+                            <div class="card-header"><h3 class="card-title">Full database (SQLite)</h3></div>
                             <div class="card-body">
                                 <p>Download a complete copy of the database, including all messages, trivia stats, and encrypted API keys.</p>
-                                <p class="text-muted">Note: Encrypted API keys require the same ENCRYPTION_MASTER_KEY to decrypt.</p>
-                                <button id="export-db-btn" class="btn btn-primary">Download Database Backup</button>
-                                <span id="export-db-status" class="save-status"></span>
+                                <p class="muted small">Encrypted API keys require the same ENCRYPTION_MASTER_KEY to decrypt.</p>
+                                <div class="form-actions">
+                                    <button type="button" id="export-db-btn" class="btn btn-primary"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download database backup</button>
+                                    <span id="export-db-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Import Section -->
-                <div class="backup-section">
-                    <h3 class="section-title">Import / Restore</h3>
-                    <div class="backup-grid">
+                    <h2 class="section-title">Import &amp; restore</h2>
+                    <div class="grid-2">
                         <div class="card">
-                            <div class="card-header"><h3>Import Configuration</h3></div>
+                            <div class="card-header"><h3 class="card-title">Import configuration</h3></div>
                             <div class="card-body">
                                 <p>Upload a previously exported JSON configuration file to apply settings.</p>
-                                <div class="file-upload-zone" id="config-upload-zone">
-                                    <input type="file" id="config-file-input" accept=".json" style="display:none">
-                                    <p>Drag &amp; drop JSON file here or <a href="#" id="config-file-browse">browse</a></p>
-                                    <p class="text-muted" id="config-file-name"></p>
+                                <div class="dropzone" id="config-upload-zone" tabindex="0" role="button" aria-label="Choose a configuration JSON file">
+                                    <input type="file" id="config-file-input" accept=".json" hidden>
+                                    <svg class="icon icon-lg" aria-hidden="true"><use href="#i-upload"/></svg>
+                                    <p>Drag &amp; drop a JSON file here, or <span class="link-text">browse</span></p>
+                                    <p class="muted small" id="config-file-name"></p>
                                 </div>
-                                <div id="config-import-preview" class="import-preview" style="display:none;"></div>
-                                <div class="backup-actions">
-                                    <button id="validate-config-btn" class="btn btn-secondary" disabled>Validate</button>
-                                    <button id="import-config-btn" class="btn btn-primary" disabled>Import Configuration</button>
+                                <div id="config-import-preview" class="import-preview" hidden></div>
+                                <div class="form-actions">
+                                    <button type="button" id="validate-config-btn" class="btn btn-secondary" disabled>Validate</button>
+                                    <button type="button" id="import-config-btn" class="btn btn-primary" disabled>Import configuration</button>
+                                    <span id="import-config-status" class="save-status" role="status" aria-live="polite"></span>
                                 </div>
-                                <span id="import-config-status" class="save-status"></span>
                             </div>
                         </div>
                         <div class="card">
-                            <div class="card-header"><h3>Restore Database</h3></div>
+                            <div class="card-header"><h3 class="card-title">Restore database</h3></div>
                             <div class="card-body">
                                 <p>Upload a previously exported SQLite database file to fully restore the bot's state.</p>
-                                <div class="backup-warning">
-                                    <strong>Warning:</strong> This will REPLACE your entire database. All current data will be lost. A backup of the current database is saved automatically before restore.
+                                <div class="form-alert is-danger">
+                                    <strong>Warning:</strong> This replaces your entire database. All current data will be lost. A backup of the current database is saved automatically before restore.
                                 </div>
-                                <div class="file-upload-zone" id="db-upload-zone">
-                                    <input type="file" id="db-file-input" accept=".db,.sqlite,.sqlite3" style="display:none">
-                                    <p>Drag &amp; drop SQLite file here or <a href="#" id="db-file-browse">browse</a></p>
-                                    <p class="text-muted" id="db-file-name"></p>
+                                <div class="dropzone" id="db-upload-zone" tabindex="0" role="button" aria-label="Choose a SQLite database file">
+                                    <input type="file" id="db-file-input" accept=".db,.sqlite,.sqlite3" hidden>
+                                    <svg class="icon icon-lg" aria-hidden="true"><use href="#i-upload"/></svg>
+                                    <p>Drag &amp; drop a SQLite file here, or <span class="link-text">browse</span></p>
+                                    <p class="muted small" id="db-file-name"></p>
                                 </div>
-                                <div id="db-restore-preview" class="import-preview" style="display:none;"></div>
-                                <div class="backup-actions">
-                                    <button id="validate-db-btn" class="btn btn-secondary" disabled>Validate</button>
-                                    <button id="restore-db-btn" class="btn btn-danger" disabled>Restore Database</button>
+                                <div id="db-restore-preview" class="import-preview" hidden></div>
+                                <div class="form-actions">
+                                    <button type="button" id="validate-db-btn" class="btn btn-secondary" disabled>Validate</button>
+                                    <button type="button" id="restore-db-btn" class="btn btn-danger" disabled>Restore database</button>
+                                    <span id="restore-db-status" class="save-status" role="status" aria-live="polite"></span>
                                 </div>
-                                <span id="restore-db-status" class="save-status"></span>
                             </div>
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <!-- Restore Confirmation Modal -->
-                <div id="restore-confirm-modal" class="modal" style="display:none;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Confirm Database Restore</h3>
-                            <button class="modal-close" id="restore-modal-close">&times;</button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="backup-warning">
-                                <p><strong>This action cannot be undone.</strong></p>
-                                <p>Your entire database will be replaced with the uploaded backup. All current messages, trivia stats, reminders, and other data will be lost.</p>
-                                <p>A backup of the current database will be saved automatically before restore.</p>
-                            </div>
-                            <div class="form-group">
-                                <label for="restore-confirm-input">Type <strong>RESTORE</strong> to confirm:</label>
-                                <input type="text" id="restore-confirm-input" placeholder="Type RESTORE" autocomplete="off">
-                            </div>
-                        </div>
-                        <div class="modal-actions">
-                            <button id="restore-cancel-btn" class="btn btn-secondary">Cancel</button>
-                            <button id="restore-confirm-btn" class="btn btn-danger" disabled>Confirm Restore</button>
+                <!-- Live Activity -->
+                <section id="tab-activity" class="tab-content" aria-labelledby="page-title">
+                    <div class="page-toolbar">
+                        <p class="page-desc">Real-time events from the bot and dashboard.</p>
+                        <div class="toolbar-actions">
+                            <span id="ws-status" class="badge badge-warning">Disconnected</span>
+                            <button type="button" id="clear-activity-btn" class="btn btn-secondary btn-sm">Clear</button>
                         </div>
                     </div>
-                </div>
-            </section>
-
-            <!-- Live Activity Tab -->
-            <section id="tab-activity" class="tab-content">
-                <div class="tab-header">
-                    <h2>Live Activity</h2>
-                </div>
-                <div class="activity-controls">
-                    <span id="ws-status" class="badge badge-warning">Disconnected</span>
-                    <button id="clear-activity-btn" class="btn btn-small btn-secondary">Clear</button>
-                </div>
-                <div id="activity-feed" class="activity-feed">
-                    <p class="loading-text">Waiting for events...</p>
-                </div>
-            </section>
-        </main>
+                    <div id="activity-feed" class="activity-feed" role="log" aria-live="off" aria-label="Live activity"></div>
+                </section>
+            </main>
+        </div>
     </div>
 
-    <script src="/js/dashboard.js?v=4"></script>
+    <!-- Dialogs -->
+    <div id="key-modal" class="modal" hidden>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="key-modal-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="key-modal-title">Add API key</h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <form id="key-edit-form" novalidate>
+                <div class="modal-body">
+                    <div data-form-alert class="form-alert" role="alert" hidden></div>
+                    <input type="hidden" id="key-edit-id">
+                    <div class="field">
+                        <label for="key-edit-provider">Provider</label>
+                        <select id="key-edit-provider">
+                            <option value="">Select provider...</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="ai_horde">AI Horde</option>
+                            <option value="cloudflare">Cloudflare API Key</option>
+                            <option value="cloudflare_url">Cloudflare Worker URL</option>
+                            <option value="comfyui">ComfyUI URL</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="key-edit-value">API key / URL</label>
+                        <input type="password" id="key-edit-value" placeholder="Enter API key or URL" autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label for="key-edit-alias">Alias (optional)</label>
+                        <input type="text" id="key-edit-alias" placeholder="e.g., Production key">
+                    </div>
+                    <div id="key-validation-result" class="save-status" role="status" aria-live="polite"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="key-test-btn">Test key</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save key</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="channel-modal" class="modal" hidden>
+        <div class="modal-dialog modal-lg" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="channel-modal-title">Edit channel <span id="channel-modal-name" class="mono">--</span></h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <form id="channel-edit-form" novalidate>
+                <div class="modal-body">
+                    <div data-form-alert class="form-alert" role="alert" hidden></div>
+                    <div id="channel-persona-note" class="form-alert is-info" hidden></div>
+                    <input type="hidden" id="channel-edit-id">
+
+                    <div class="field">
+                        <div class="field-head">
+                            <label for="channel-edit-model">Model override</label>
+                            <span class="chip chip-source" data-source-for="model" hidden></span>
+                        </div>
+                        <div class="model-picker">
+                            <input type="text" id="channel-model-search" class="model-search" placeholder="Filter models..." autocomplete="off" aria-label="Filter models" data-ignore-dirty>
+                            <select id="channel-edit-model" size="6" class="model-select">
+                                <option value="">Use global default</option>
+                            </select>
+                        </div>
+                        <small class="field-hint" id="channel-model-hint"></small>
+                    </div>
+                    <div class="field">
+                        <div class="field-head">
+                            <label for="channel-edit-provider">Provider override</label>
+                        </div>
+                        <select id="channel-edit-provider">
+                            <option value="">Use global default</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="openai">OpenAI</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <div class="field-head">
+                            <label for="channel-edit-prompt">System prompt override</label>
+                            <span class="chip chip-source" data-source-for="system_prompt" hidden></span>
+                        </div>
+                        <textarea id="channel-edit-prompt" rows="3" placeholder="Leave blank to inherit"></textarea>
+                        <small class="field-hint" id="channel-prompt-hint"></small>
+                    </div>
+
+                    <fieldset class="fieldset">
+                        <legend>Memory overrides</legend>
+                        <div class="form-row form-row-3">
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-timeout">Timeout (h)</label>
+                                    <span class="chip chip-source" data-source-for="session_timeout_hours" hidden></span>
+                                </div>
+                                <input type="number" id="channel-edit-timeout" min="1" max="168">
+                                <small class="field-hint" id="channel-timeout-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-summary">Auto-summarize</label>
+                                    <span class="chip chip-source" data-source-for="memory_summary_enabled" hidden></span>
+                                </div>
+                                <select id="channel-edit-summary">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                                <small class="field-hint" id="channel-summary-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-max-summaries">Max summaries</label>
+                                    <span class="chip chip-source" data-source-for="max_memory_summaries" hidden></span>
+                                </div>
+                                <input type="number" id="channel-edit-max-summaries" min="1" max="50">
+                                <small class="field-hint" id="channel-max-summaries-hint"></small>
+                            </div>
+                        </div>
+                    </fieldset>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" id="channel-reset-btn">Reset to defaults</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="thread-modal" class="modal" hidden>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="thread-modal-title">Edit thread <span id="thread-modal-name" class="mono">--</span></h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <form id="thread-edit-form" novalidate>
+                <div class="modal-body">
+                    <div data-form-alert class="form-alert" role="alert" hidden></div>
+                    <input type="hidden" id="thread-edit-id">
+                    <div class="field">
+                        <label for="thread-edit-name">Thread name</label>
+                        <input type="text" id="thread-edit-name">
+                    </div>
+                    <div class="field">
+                        <label for="thread-edit-model">Model override</label>
+                        <div class="model-picker">
+                            <input type="text" id="thread-model-search" class="model-search" placeholder="Filter models..." autocomplete="off" aria-label="Filter models" data-ignore-dirty>
+                            <select id="thread-edit-model" size="6" class="model-select">
+                                <option value="">Use channel/global default</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="thread-edit-prompt">System prompt override</label>
+                        <textarea id="thread-edit-prompt" rows="3" placeholder="Leave blank for channel/global default"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" id="thread-delete-btn">Delete thread</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="persona-modal" class="modal" hidden>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="persona-modal-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="persona-modal-title">Edit persona</h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <form id="persona-edit-form" novalidate>
+                <div class="modal-body">
+                    <div data-form-alert class="form-alert" role="alert" hidden></div>
+                    <input type="hidden" id="persona-edit-channel-id">
+                    <div class="field">
+                        <label for="persona-edit-display-name">Display name *</label>
+                        <input type="text" id="persona-edit-display-name" placeholder="e.g. TechBot, Muse, Professor" required maxlength="80">
+                    </div>
+                    <div class="field">
+                        <label for="persona-edit-avatar-url">Avatar URL</label>
+                        <div class="avatar-preview-row">
+                            <input type="text" id="persona-edit-avatar-url" placeholder="https://example.com/avatar.png">
+                            <img id="persona-avatar-preview" class="persona-avatar-preview" alt="Avatar preview" hidden>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="persona-edit-system-prompt">System prompt</label>
+                        <textarea id="persona-edit-system-prompt" rows="4" placeholder="Custom personality and behavior for this persona"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label for="persona-edit-model">Model override</label>
+                            <input type="text" id="persona-edit-model" placeholder="Leave blank for channel/global default">
+                        </div>
+                        <div class="field">
+                            <label for="persona-edit-provider">Provider override</label>
+                            <select id="persona-edit-provider">
+                                <option value="">Use default</option>
+                                <option value="openrouter">OpenRouter</option>
+                                <option value="openai">OpenAI</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="persona-edit-template">Apply template</label>
+                        <select id="persona-edit-template">
+                            <option value="">Custom (no template)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" id="persona-remove-btn">Remove persona</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save persona</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="template-modal" class="modal" hidden>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="template-modal-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="template-modal-title">Create template</h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <form id="template-edit-form" novalidate>
+                <div class="modal-body">
+                    <div data-form-alert class="form-alert" role="alert" hidden></div>
+                    <input type="hidden" id="template-edit-id">
+                    <div class="form-row">
+                        <div class="field">
+                            <label for="template-edit-name">Template name *</label>
+                            <input type="text" id="template-edit-name" placeholder="e.g. Tech Guru" required>
+                        </div>
+                        <div class="field">
+                            <label for="template-edit-display-name">Display name *</label>
+                            <input type="text" id="template-edit-display-name" placeholder="e.g. TechBot" required maxlength="80">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="template-edit-avatar-url">Avatar URL</label>
+                        <input type="text" id="template-edit-avatar-url" placeholder="https://example.com/avatar.png">
+                    </div>
+                    <div class="field">
+                        <label for="template-edit-description">Description</label>
+                        <input type="text" id="template-edit-description" placeholder="Short description of this persona">
+                    </div>
+                    <div class="field">
+                        <label for="template-edit-system-prompt">System prompt</label>
+                        <textarea id="template-edit-system-prompt" rows="4" placeholder="Personality and behavior instructions"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="field">
+                            <label for="template-edit-model">Model</label>
+                            <input type="text" id="template-edit-model" placeholder="Leave blank for default">
+                        </div>
+                        <div class="field">
+                            <label for="template-edit-provider">Provider</label>
+                            <select id="template-edit-provider">
+                                <option value="">Default</option>
+                                <option value="openrouter">OpenRouter</option>
+                                <option value="openai">OpenAI</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-danger" id="template-delete-btn" hidden>Delete template</button>
+                    <span class="spacer"></span>
+                    <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save template</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="channel-picker-modal" class="modal" hidden>
+        <div class="modal-dialog modal-sm" role="dialog" aria-modal="true" aria-labelledby="channel-picker-title" tabindex="-1">
+            <div class="modal-header">
+                <h2 id="channel-picker-title">Select channel</h2>
+                <button type="button" class="icon-btn" data-modal-close aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label for="channel-picker-search">Search channels</label>
+                    <input type="search" id="channel-picker-search" placeholder="Filter by name or server..." autocomplete="off" data-autofocus>
+                </div>
+                <div id="channel-picker-list" class="channel-picker-list" role="listbox" aria-label="Channels"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="palette-modal" class="modal modal-palette" hidden>
+        <div class="modal-dialog palette" role="dialog" aria-modal="true" aria-label="Command palette" tabindex="-1">
+            <div class="palette-input-row">
+                <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+                <input type="text" id="palette-input" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list" aria-label="Search pages, settings, channels, threads and personas" placeholder="Search pages, settings, channels, threads..." autocomplete="off" spellcheck="false" data-autofocus>
+                <kbd class="kbd">Esc</kbd>
+            </div>
+            <ul id="palette-list" class="palette-list" role="listbox" aria-label="Results"></ul>
+            <div class="palette-footer" aria-hidden="true">
+                <span><kbd class="kbd">&uarr;</kbd><kbd class="kbd">&darr;</kbd> navigate</span>
+                <span><kbd class="kbd">Enter</kbd> open</span>
+                <span id="palette-searching" class="palette-searching" hidden>Searching...</span>
+            </div>
+            <div id="palette-status" class="sr-only" role="status" aria-live="polite"></div>
+        </div>
+    </div>
+
+    <div id="confirm-modal" class="modal modal-confirm" hidden>
+        <div class="modal-dialog modal-sm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" tabindex="-1">
+            <div class="modal-body confirm-body">
+                <div id="confirm-icon" class="confirm-icon"></div>
+                <div class="confirm-text">
+                    <h2 id="confirm-title">Are you sure?</h2>
+                    <p id="confirm-message"></p>
+                    <ul id="confirm-details" class="confirm-list" hidden></ul>
+                    <div id="confirm-typed" class="field" hidden>
+                        <label for="confirm-input" id="confirm-input-label">Type <code id="confirm-word" class="code"></code> to confirm</label>
+                        <input type="text" id="confirm-input" autocomplete="off" spellcheck="false">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="confirm-cancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="confirm-ok" class="btn btn-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-region" class="toast-region" role="region" aria-label="Notifications" aria-live="polite"></div>
+
+    <script src="/js/core.js?v=5"></script>
+    <script src="/js/palette.js?v=5"></script>
+    <script src="/js/dashboard.js?v=5"></script>
 </body>
 </html>

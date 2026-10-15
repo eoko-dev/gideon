@@ -266,21 +266,36 @@ The dashboard supports encrypted API key storage in the database. To enable:
 
 Keys stored in the database take priority over `.env` values. This is fully backward compatible — the bot works without `ENCRYPTION_MASTER_KEY` set.
 
-**Dashboard Tabs:**
+**Security model:**
 
-| Tab | Description |
-| --- | --- |
-| Overview | Bot status, server count, message stats, uptime, latency, provider links |
-| API Keys | Encrypted API key management with validation, import from `.env`, and audit logging |
-| Settings | Edit global model, provider, system prompt, memory limits, session timeout, auto-summarize toggle, and tool calling |
-| Channels | View and edit channel-specific configuration overrides (including per-channel memory settings) |
-| Threads | Manage AI conversation threads (rename, configure, delete) |
-| Messages | Browse stored conversation history with filtering and pagination |
-| Memory | Browse and manage long-term channel memories; view summaries with conversation dates; clear memories or manually trigger summarization |
-| Personas | Browse templates, configure per-channel personas, create custom templates |
-| Backup & Restore | Export/import configuration JSON or full SQLite database backup |
-| Diagnostics | System health checks, provider status, manual data pruning |
-| Live Activity | Real-time WebSocket feed of bot events and message activity |
+The dashboard listens on all interfaces (`0.0.0.0`) by design and is meant for internal, secured networks only — never expose it to the public internet.
+
+* **Login lockout** — after 5 failed attempts from an IP, logins are refused for 90 seconds; each further lockout doubles (up to 24 hours). A successful login resets the counter.
+* **Sessions** — random 24-hour session tokens in an HttpOnly, `SameSite=Strict` cookie (marked `Secure` when served over HTTPS). The WebSocket feed authenticates with the same cookie and only accepts same-origin connections.
+* **Browser hardening** — every response carries a Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`; API responses are never cached.
+* **Backups** — database exports and uploaded files use unique temporary files that are deleted as soon as the request finishes.
+
+Dashboard tests run with the rest of the suite: `python -m unittest discover -s tests`.
+
+**Dashboard Sections:**
+
+Press **Ctrl/⌘ + K** anywhere to jump to a tab, setting, channel, thread or persona.
+
+| Group | Tab | Description |
+| --- | --- | --- |
+| Core | Overview | Bot status, provider and API key health, recent errors, uptime, latency, quick actions (sync slash commands) |
+| Core | Settings | Global model, provider, system prompt, history limits, memory/session settings and tool calling |
+| Core | API Keys | Encrypted API key management with test-before-save, import from `.env`, and audit logging |
+| Conversations | Channels | Per-channel model, provider, prompt and memory overrides, showing where each effective value comes from (global, channel or persona) |
+| Conversations | Threads | Manage AI conversation threads (rename, configure, delete) |
+| Conversations | Personas | Browse templates, configure per-channel personas, create custom templates |
+| Conversations | Memory | Browse and manage long-term channel memories; clear memories or trigger summarization |
+| Conversations | Messages | Browse stored conversation history with filtering and pagination |
+| Generation | Image Gen | Active image provider, per-provider settings and OpenRouter modalities |
+| Generation | Video Gen | Video model defaults and a test-generation panel |
+| Operations | Diagnostics | System health checks, provider status, manual data pruning |
+| Operations | Backup & Restore | Export/import configuration JSON or full SQLite database backup |
+| Operations | Live Activity | Real-time WebSocket feed of bot events and message activity |
 
 ### Persona Configuration (Optional)
 
@@ -512,7 +527,11 @@ gideon/
 │   ├── dashboard/                  # Dashboard frontend assets
 │   │   ├── index.html              # Main dashboard page
 │   │   ├── css/dashboard.css       # Dashboard styles
-│   │   └── js/dashboard.js         # Dashboard application logic
+│   │   └── js/
+│   │       ├── core.js             # Shared UI kit (API client, toasts, modals, escaping)
+│   │       ├── palette.js          # Ctrl/⌘+K command palette
+│   │       ├── theme.js            # Theme bootstrap (loaded before first paint)
+│   │       └── dashboard.js        # Dashboard application logic
 │   └── utils/
 │       ├── ai_horde_client.py
 │       ├── api_key_service.py      # Encrypted API key management
@@ -533,7 +552,8 @@ gideon/
 │       ├── webhook_sender.py       # Webhook lifecycle management for personas
 │       ├── dashboard/
 │       │   ├── server.py           # aiohttp web server & API routes
-│       │   └── auth.py             # Authentication middleware
+│       │   ├── auth.py             # Sessions, login lockout, security headers
+│       │   └── error_log.py        # Recent-errors ring buffer for the Overview tab
 │       └── database/
 │           ├── core.py             # DatabaseManager (delegates to sub-managers)
 │           ├── schema.py           # Table definitions
