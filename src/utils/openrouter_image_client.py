@@ -3,10 +3,14 @@ import aiohttp
 from .http_session import SharedSessionMixin
 import base64
 import json
+import asyncio
 import logging
-from typing import Dict, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger('openrouter_image_client')
+
+MODELS_CACHE_TTL = 600
 
 
 class OpenRouterImageClient(SharedSessionMixin):
@@ -27,6 +31,9 @@ class OpenRouterImageClient(SharedSessionMixin):
         Args:
             api_key: OpenRouter API key
         """
+        self._models_cache: List[Dict[str, Any]] = []
+        self._models_cache_at: float = 0.0
+        self._models_lock = asyncio.Lock()
         if not api_key:
             logger.warning("OpenRouter API key is not configured. Image generation will not work.")
             self.client = None
@@ -109,7 +116,9 @@ class OpenRouterImageClient(SharedSessionMixin):
             # Build the payload
             # Modalities can be overridden via kwargs (from dashboard config)
             # Default: ["image", "text"] which works with most image-capable models
-            modalities = kwargs.get("modalities", ["image", "text"])
+            if not self._models_cache:
+                await self.get_image_models()
+            modalities = self._resolve_modalities(model, kwargs.get("modalities") or ["image", "text"])
 
             payload = {
                 "model": model,
@@ -257,9 +266,49 @@ class OpenRouterImageClient(SharedSessionMixin):
             logger.exception(f"Unexpected error during OpenRouter image generation: {e}")
             return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
-    async def get_image_models(self) -> Dict[str, Any]:
+    @staticmethod
+    def _format_image_model(model_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Normalize one OpenRouter /models entry, or None if it cannot output images."""
+        if not isinstance(model_info, dict) or not model_info.get("id"):
+            return None
+        architecture = model_info.get("architecture") or {}
+        output_modalities = architecture.get("output_modalities") or []
+        modality_str = architecture.get("modality") or ""
+        outputs = [str(m).lower() for m in output_modalities]
+        if not outputs and "->" in modality_str:
+            outputs = modality_str.split("->", 1)[1].lower().split("+")
+        if "image" not in outputs:
+            return None
+        return {
+            "id": model_info["id"],
+            "name": model_info.get("name") or model_info["id"],
+            "output_modalities": output_modalities,
+            "modality": modality_str,
+        }
+
+    def get_cached_image_models(self) -> List[Dict[str, Any]]:
+        """Last successfully fetched model list, without network I/O."""
+        return list(self._models_cache)
+
+    def models_cache_is_stale(self) -> bool:
+        return not self._models_cache or time.monotonic() - self._models_cache_at >= MODELS_CACHE_TTL
+
+    def _resolve_modalities(self, model: str, requested: List[str]) -> List[str]:
+        """Drop requested modalities the model cannot output (e.g. "text" for image-only models)."""
+        entry = next((m for m in self._models_cache if m["id"] == model), None)
+        if not entry or not entry.get("output_modalities"):
+            return requested
+        supported = set(entry["output_modalities"])
+        resolved = [m for m in requested if m in supported]
+        return resolved if "image" in resolved else ["image"]
+
+    async def get_image_models(self, force_refresh: bool = False) -> Dict[str, Any]:
         """
-        Get a list of OpenRouter models that support image generation.
+        Get the live list of OpenRouter models that can generate images.
+
+        Uses OpenRouter's server-side ``output_modalities=image`` filter; the
+        unfiltered /models endpoint only returns text-output models and so
+        omits image-only models (FLUX, Seedream, Recraft, etc.).
 
         Returns:
             Dict with "success": True and "models" list, or "success": False with "error"
@@ -267,99 +316,39 @@ class OpenRouterImageClient(SharedSessionMixin):
         if not self.client:
             return {"success": False, "error": "Client not initialized"}
 
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "HTTP-Referer": "https://github.com/eoko-dev/gideon",
-                "X-Title": "Gideon Discord Bot"
-            }
+        if not force_refresh and not self.models_cache_is_stale():
+            return {"success": True, "models": self.get_cached_image_models(), "source": "cache"}
 
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with self.shared_session() as session:
-                async with session.get(
-                    f"{self.base_url}/models",
-                    headers=headers,
-                    timeout=timeout
-                ) as response:
-                    if response.status != 200:
-                        return {"success": False, "error": "Failed to fetch model list"}
+        async with self._models_lock:
+            if not force_refresh and not self.models_cache_is_stale():
+                return {"success": True, "models": self.get_cached_image_models(), "source": "cache"}
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "HTTP-Referer": "https://github.com/eoko-dev/gideon",
+                    "X-Title": "Gideon Discord Bot"
+                }
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with self.shared_session() as session:
+                    async with session.get(
+                        f"{self.base_url}/models",
+                        params={"output_modalities": "image"},
+                        headers=headers,
+                        timeout=timeout
+                    ) as response:
+                        if response.status != 200:
+                            return {"success": False, "error": f"Failed to fetch model list (HTTP {response.status})"}
+                        models_data = await response.json()
 
-                    models_data = await response.json()
+                raw = models_data.get("data", []) if isinstance(models_data, dict) else []
+                image_models = [m for m in (self._format_image_model(r) for r in raw) if m]
+                if not image_models:
+                    return {"success": False, "error": "OpenRouter returned no image generation models"}
 
-                    # Filter to only models with image generation capability
-                    image_models = []
-                    total_models = len(models_data.get("data", []))
-                    logger.debug(f"Processing {total_models} total models from OpenRouter")
-
-                    # Debug: Log structure of first model to understand API response
-                    if total_models > 0:
-                        sample = models_data.get("data", [])[0]
-                        arch = sample.get("architecture", {})
-                        logger.info(f"Sample model keys: {list(sample.keys())}")
-                        logger.info(f"Sample architecture.output_modalities: {arch.get('output_modalities')}")
-                        logger.info(f"Sample architecture.modality: {arch.get('modality')}")
-
-                    for model_info in models_data.get("data", []):
-                        model_id = model_info.get("id")
-                        # output_modalities and modality are nested inside architecture
-                        architecture = model_info.get("architecture", {}) or {}
-                        output_modalities = architecture.get("output_modalities", [])
-                        modality_str = architecture.get("modality", "")
-
-                        supports_images = False
-
-                        # Method 1: Direct output_modalities array check
-                        if output_modalities and "image" in output_modalities:
-                            supports_images = True
-                            logger.debug(f"Model {model_id}: found via output_modalities")
-
-                        # Method 2: Parse modality string (e.g., "text+image->text+image")
-                        # Check if the OUTPUT part (after ->) contains "image"
-                        elif modality_str and "->" in modality_str:
-                            output_part = modality_str.split("->")[-1]
-                            if "image" in output_part.lower():
-                                supports_images = True
-                                logger.debug(f"Model {model_id}: found via modality string '{modality_str}'")
-
-                        # Method 3: Check against known image model IDs
-                        # OpenRouter API doesn't reliably expose image capability, so we maintain a list
-                        # of confirmed image-generation models from https://openrouter.ai/models?output_modalities=image
-                        elif model_id:
-                            known_image_models = {
-                                "sourceful/riverflow-v2-pro",
-                                "sourceful/riverflow-v2-fast",
-                                "black-forest-labs/flux.2-klein-4b",
-                                "bytedance-seed/seedream-4.5",
-                                "black-forest-labs/flux.2-max",
-                                "sourceful/riverflow-v2-max-preview",
-                                "sourceful/riverflow-v2-standard-preview",
-                                "sourceful/riverflow-v2-fast-preview",
-                                "black-forest-labs/flux.2-flex",
-                                "black-forest-labs/flux.2-pro",
-                                "google/gemini-3-pro-image-preview",
-                                "openai/gpt-5-image-mini",
-                                "openai/gpt-5-image",
-                                "google/gemini-2.5-flash-image",
-                                "google/gemini-2.5-flash-image-preview",
-                            }
-                            if model_id in known_image_models:
-                                supports_images = True
-                                logger.debug(f"Model {model_id}: found via known model list")
-
-                        if supports_images:
-                            image_models.append({
-                                "id": model_id,
-                                "name": model_info.get("name", model_id),
-                                "output_modalities": output_modalities,
-                                "modality": modality_str
-                            })
-
-                    logger.info(f"Found {len(image_models)} image-capable models out of {total_models} total models on OpenRouter")
-                    return {
-                        "success": True,
-                        "models": image_models
-                    }
-
-        except Exception as e:
-            logger.error(f"Error fetching image models: {e}")
-            return {"success": False, "error": str(e)}
+                self._models_cache = image_models
+                self._models_cache_at = time.monotonic()
+                logger.info(f"Fetched {len(image_models)} image generation models from OpenRouter")
+                return {"success": True, "models": self.get_cached_image_models(), "source": "api"}
+            except Exception as e:
+                logger.error(f"Error fetching image models: {e}")
+                return {"success": False, "error": str(e)}

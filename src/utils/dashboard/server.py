@@ -864,31 +864,21 @@ class DashboardServer:
             return web.json_response({'error': str(e)}, status=500)
 
     async def _handle_get_image_models(self, request):
-        """Get available OpenRouter image generation models (hardcoded list).
+        """Get the live list of OpenRouter image generation models."""
+        try:
+            image_cog = self.bot.get_cog("UnifiedImageCommands")
+            client = getattr(image_cog, 'openrouter_image_client', None) if image_cog else None
+            if not client:
+                return web.json_response({'error': 'OpenRouter image generation is not configured'}, status=503)
 
-        Only image gen models are hardcoded. Text LLMs continue to be
-        polled dynamically via the /api/models/<provider> endpoint.
-        """
-        # The OpenRouter /models API does not reliably expose image generation
-        # capability, so we maintain this list manually.
-        models = [
-            {"id": "sourceful/riverflow-v2-pro", "name": "Riverflow v2 Pro"},
-            {"id": "sourceful/riverflow-v2-fast", "name": "Riverflow v2 Fast"},
-            {"id": "black-forest-labs/flux.2-klein-4b", "name": "FLUX.2 Klein 4B"},
-            {"id": "bytedance-seed/seedream-4.5", "name": "SeedDream 4.5"},
-            {"id": "black-forest-labs/flux.2-max", "name": "FLUX.2 Max"},
-            {"id": "sourceful/riverflow-v2-max-preview", "name": "Riverflow v2 Max Preview"},
-            {"id": "sourceful/riverflow-v2-standard-preview", "name": "Riverflow v2 Standard Preview"},
-            {"id": "sourceful/riverflow-v2-fast-preview", "name": "Riverflow v2 Fast Preview"},
-            {"id": "black-forest-labs/flux.2-flex", "name": "FLUX.2 Flex"},
-            {"id": "black-forest-labs/flux.2-pro", "name": "FLUX.2 Pro"},
-            {"id": "google/gemini-3-pro-image-preview", "name": "Gemini 3 Pro Image Preview"},
-            {"id": "openai/gpt-5-image-mini", "name": "GPT-5 Image Mini"},
-            {"id": "openai/gpt-5-image", "name": "GPT-5 Image"},
-            {"id": "google/gemini-2.5-flash-image", "name": "Gemini 2.5 Flash Image"},
-            {"id": "google/gemini-2.5-flash-image-preview", "name": "Gemini 2.5 Flash Image Preview"},
-        ]
-        return web.json_response(models)
+            force = request.query.get('refresh') in ('1', 'true')
+            result = await client.get_image_models(force_refresh=force)
+            if not result.get('success'):
+                return web.json_response({'error': result.get('error', 'Failed to fetch models')}, status=502)
+            return web.json_response(result.get('models', []))
+        except Exception as e:
+            logger.error(f"Error fetching image models: {e}", exc_info=True)
+            return web.json_response({'error': str(e)}, status=500)
 
     # ── Video Generation Handlers ─────────────────────────────────
 
@@ -980,13 +970,12 @@ class DashboardServer:
         try:
             video_cog = self.bot.get_cog("VideoCommands")
             if not video_cog or not video_cog.video_client:
-                from ...utils.openrouter_video_client import OpenRouterVideoClient
-                models = OpenRouterVideoClient._fallback_models()
-                return web.json_response({'models': models, 'source': 'fallback'})
+                return web.json_response({'error': 'Video generation is not configured'}, status=503)
 
-            result = await video_cog.video_client.list_video_models()
+            force = request.query.get('refresh') in ('1', 'true')
+            result = await video_cog.video_client.list_video_models(force_refresh=force)
             if not result.get('success'):
-                return web.json_response({'error': result.get('error', 'Failed to fetch models')}, status=500)
+                return web.json_response({'error': result.get('error', 'Failed to fetch models')}, status=502)
             return web.json_response({
                 'models': result.get('models', []),
                 'source': result.get('source', 'unknown'),

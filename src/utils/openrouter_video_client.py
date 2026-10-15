@@ -16,10 +16,12 @@ from .http_session import SharedSessionMixin
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger('openrouter_video_client')
 
+MODELS_CACHE_TTL = 600
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "error"}
 
 
@@ -34,6 +36,9 @@ class OpenRouterVideoClient(SharedSessionMixin):
             self.api_key = api_key
             logger.info("OpenRouter Video client initialized successfully.")
         self.base_url = "https://openrouter.ai/api/v1"
+        self._models_cache: List[Dict[str, Any]] = []
+        self._models_cache_at: float = 0.0
+        self._models_lock = asyncio.Lock()
 
     @property
     def is_configured(self) -> bool:
@@ -85,7 +90,7 @@ class OpenRouterVideoClient(SharedSessionMixin):
             model: OpenRouter video model id (e.g. "google/veo-3.1").
             aspect_ratio: e.g. "16:9", "9:16", "1:1".
             duration: Duration in seconds.
-            resolution: e.g. "480p", "720p", "1080p", "4K".
+            resolution: e.g. "480p", "720p", "1080p", "2K", "4K".
             seed: Optional seed for reproducibility.
             audio: Whether to generate audio (model dependent).
             image: Optional URL or base64 data URL of a reference/start frame.
@@ -274,134 +279,78 @@ class OpenRouterVideoClient(SharedSessionMixin):
         except Exception as e:
             return {"success": False, "error": f"Unexpected error: {e}"}
 
-    async def list_video_models(self) -> Dict[str, Any]:
-        """Fetch the list of available video generation models.
-
-        Falls back to a curated list if the live endpoint is unreachable.
-        """
-        fallback = self._fallback_models()
-        if not self.is_configured:
-            return {"success": True, "models": fallback, "source": "fallback"}
-
-        try:
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with self.shared_session() as session:
-                async with session.get(
-                    f"{self.base_url}/videos/models",
-                    headers=self._headers(),
-                    timeout=timeout,
-                ) as response:
-                    if response.status != 200:
-                        logger.warning(f"video models endpoint returned {response.status}; using fallback")
-                        return {"success": True, "models": fallback, "source": "fallback"}
-                    data = await response.json()
-                    raw = data.get("data") if isinstance(data, dict) else data
-                    if not isinstance(raw, list):
-                        return {"success": True, "models": fallback, "source": "fallback"}
-                    models: List[Dict[str, Any]] = []
-                    for m in raw:
-                        if not isinstance(m, dict):
-                            continue
-                        model_id = m.get("id") or m.get("model")
-                        if not model_id:
-                            continue
-                        models.append({
-                            "id": model_id,
-                            "name": m.get("name") or model_id,
-                            "supported_resolutions": m.get("supported_resolutions") or m.get("resolutions") or [],
-                            "supported_aspect_ratios": m.get("supported_aspect_ratios") or m.get("aspect_ratios") or [],
-                            "supported_durations": m.get("supported_durations") or m.get("durations") or [],
-                            "supports_audio": m.get("supports_audio"),
-                            "supports_image_input": m.get("supports_image_input"),
-                            "pricing": m.get("pricing"),
-                        })
-                    if not models:
-                        return {"success": True, "models": fallback, "source": "fallback"}
-                    return {"success": True, "models": models, "source": "api"}
-        except Exception as e:
-            logger.warning(f"Failed to fetch video models from OpenRouter: {e}; using fallback list")
-            return {"success": True, "models": fallback, "source": "fallback"}
-
     @staticmethod
-    def _fallback_models() -> List[Dict[str, Any]]:
-        """Curated fallback list of OpenRouter video generation models.
+    def format_video_model(m: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Normalize one /videos/models entry for the dashboard and autocomplete."""
+        if not isinstance(m, dict):
+            return None
+        model_id = m.get("id") or m.get("model")
+        if not model_id:
+            return None
+        frame_images = m.get("supported_frame_images") or []
+        supports_audio = m.get("supports_audio")
+        if supports_audio is None:
+            supports_audio = m.get("generate_audio")
+        supports_image_input = m.get("supports_image_input")
+        if supports_image_input is None:
+            supports_image_input = "first_frame" in frame_images
+        return {
+            "id": model_id,
+            "name": m.get("name") or model_id,
+            "description": m.get("description", ""),
+            "supported_resolutions": m.get("supported_resolutions") or m.get("resolutions") or [],
+            "supported_aspect_ratios": m.get("supported_aspect_ratios") or m.get("aspect_ratios") or [],
+            "supported_durations": m.get("supported_durations") or m.get("durations") or [],
+            "supported_frame_images": frame_images,
+            "supports_audio": supports_audio,
+            "supports_image_input": supports_image_input,
+            "pricing": m.get("pricing_skus") or m.get("pricing"),
+        }
 
-        OpenRouter advertises (per the announcement post): Seedance 2.0 / 1.5,
-        Veo 3.1, Wan 2.7 / 2.6, and Sora 2 Pro. The /api/v1/videos/models
-        endpoint is the source of truth at runtime; this list keeps the UI
-        usable when the endpoint is unreachable.
+    def get_cached_video_models(self) -> List[Dict[str, Any]]:
+        """Last successfully fetched model list, without network I/O."""
+        return list(self._models_cache)
+
+    def models_cache_is_stale(self) -> bool:
+        return not self._models_cache or time.monotonic() - self._models_cache_at >= MODELS_CACHE_TTL
+
+    async def list_video_models(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """Fetch the live list of video generation models from /videos/models.
+
+        Results are cached for MODELS_CACHE_TTL seconds. No hardcoded fallback
+        is served: on failure the caller gets an error rather than stale models.
         """
-        return [
-            {
-                "id": "google/veo-3.1",
-                "name": "Veo 3.1 (Google)",
-                "supported_resolutions": ["720p", "1080p"],
-                "supported_aspect_ratios": ["16:9", "9:16"],
-                "supported_durations": [4, 6, 8],
-                "supports_audio": True,
-                "supports_image_input": True,
-            },
-            {
-                "id": "google/veo-3",
-                "name": "Veo 3 (Google)",
-                "supported_resolutions": ["720p", "1080p"],
-                "supported_aspect_ratios": ["16:9", "9:16"],
-                "supported_durations": [4, 6, 8],
-                "supports_audio": True,
-                "supports_image_input": True,
-            },
-            {
-                "id": "openai/sora-2-pro",
-                "name": "Sora 2 Pro (OpenAI)",
-                "supported_resolutions": ["720p", "1080p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [5, 10],
-                "supports_audio": True,
-                "supports_image_input": True,
-            },
-            {
-                "id": "bytedance/seedance-2.0",
-                "name": "Seedance 2.0 (ByteDance)",
-                "supported_resolutions": ["480p", "720p", "1080p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [5, 10],
-                "supports_audio": False,
-                "supports_image_input": True,
-            },
-            {
-                "id": "bytedance/seedance-1.5",
-                "name": "Seedance 1.5 (ByteDance)",
-                "supported_resolutions": ["480p", "720p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [5, 10],
-                "supports_audio": False,
-                "supports_image_input": True,
-            },
-            {
-                "id": "alibaba/wan-2.7",
-                "name": "Wan 2.7 (Alibaba)",
-                "supported_resolutions": ["480p", "720p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [4, 5, 6, 8],
-                "supports_audio": False,
-                "supports_image_input": True,
-            },
-            {
-                "id": "alibaba/wan-2.6",
-                "name": "Wan 2.6 (Alibaba)",
-                "supported_resolutions": ["480p", "720p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [4, 5, 6, 8],
-                "supports_audio": False,
-                "supports_image_input": True,
-            },
-            {
-                "id": "kwaivgi/kling-video-o1",
-                "name": "Kling Video O1 (Kuaishou)",
-                "supported_resolutions": ["720p", "1080p"],
-                "supported_aspect_ratios": ["16:9", "9:16", "1:1"],
-                "supported_durations": [5, 10],
-                "supports_audio": False,
-                "supports_image_input": True,
-            },
-        ]
+        if not self.is_configured:
+            return {"success": False, "error": "OpenRouter client is not configured."}
+
+        if not force_refresh and not self.models_cache_is_stale():
+            return {"success": True, "models": self.get_cached_video_models(), "source": "cache"}
+
+        async with self._models_lock:
+            if not force_refresh and not self.models_cache_is_stale():
+                return {"success": True, "models": self.get_cached_video_models(), "source": "cache"}
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with self.shared_session() as session:
+                    async with session.get(
+                        f"{self.base_url}/videos/models",
+                        headers=self._headers(),
+                        timeout=timeout,
+                    ) as response:
+                        if response.status != 200:
+                            return self._parse_error(response.status, await response.text())
+                        data = await response.json()
+
+                raw = data.get("data") if isinstance(data, dict) else data
+                if not isinstance(raw, list):
+                    return {"success": False, "error": "OpenRouter returned an invalid video model list."}
+                models = [f for f in (self.format_video_model(m) for m in raw) if f]
+                if not models:
+                    return {"success": False, "error": "OpenRouter returned no video generation models."}
+
+                self._models_cache = models
+                self._models_cache_at = time.monotonic()
+                return {"success": True, "models": self.get_cached_video_models(), "source": "api"}
+            except Exception as e:
+                logger.warning(f"Failed to fetch video models from OpenRouter: {e}")
+                return {"success": False, "error": f"Failed to fetch video models from OpenRouter: {e}"}
