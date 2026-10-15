@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 
 # Import clients and config
 import io
@@ -13,6 +13,7 @@ from ..utils.ai_horde_client import AIHordeClient
 from ..utils.cloudflare_client import CloudflareWorkerClient
 from ..utils.openai_client import OpenAIClient
 from ..utils.comfyui_client import ComfyUIClient
+from ..utils.model_list_refresher import ModelListRefresher
 from ..utils.openrouter_image_client import OpenRouterImageClient
 from ..utils.database import DatabaseManager
 from ..config import (
@@ -103,26 +104,10 @@ class UnifiedImageCommands(commands.Cog):
             if comfyui_url:
                 self.comfyui_client = ComfyUIClient(comfyui_url)
 
-        # Hardcoded list of OpenRouter image-capable models.
-        # The OpenRouter /models API does not reliably expose image generation
-        # capability, so we maintain this list manually.
-        self.openrouter_image_models = [
-            "sourceful/riverflow-v2-pro",
-            "sourceful/riverflow-v2-fast",
-            "black-forest-labs/flux.2-klein-4b",
-            "bytedance-seed/seedream-4.5",
-            "black-forest-labs/flux.2-max",
-            "sourceful/riverflow-v2-max-preview",
-            "sourceful/riverflow-v2-standard-preview",
-            "sourceful/riverflow-v2-fast-preview",
-            "black-forest-labs/flux.2-flex",
-            "black-forest-labs/flux.2-pro",
-            "google/gemini-3-pro-image-preview",
-            "openai/gpt-5-image-mini",
-            "openai/gpt-5-image",
-            "google/gemini-2.5-flash-image",
-            "google/gemini-2.5-flash-image-preview",
-        ]
+        self._openrouter_models_refresher = (
+            ModelListRefresher(self.openrouter_image_client.get_image_models, "OpenRouter image")
+            if self.openrouter_image_client else None
+        )
 
         # Log which clients are available
         if not self.horde_client: logger.warning("AI Horde client not initialized (API key missing).")
@@ -130,6 +115,19 @@ class UnifiedImageCommands(commands.Cog):
         if not self.openai_client: logger.warning("OpenAI client not initialized (API key missing).")
         if not self.comfyui_client: logger.warning("ComfyUI client not initialized (URL missing).")
         if not self.openrouter_image_client: logger.warning("OpenRouter Image client not initialized (API key missing).")
+
+    def cog_unload(self):
+        if self._openrouter_models_refresher:
+            self._openrouter_models_refresher.cancel()
+
+    async def _get_openrouter_image_model_ids(self) -> List[str]:
+        """Live image model ids for autocomplete, bounded by Discord's response deadline."""
+        client = self.openrouter_image_client
+        if not client:
+            return []
+        if client.models_cache_is_stale():
+            await self._openrouter_models_refresher.refresh(wait=not client.get_cached_image_models())
+        return [m["id"] for m in client.get_cached_image_models()]
 
     async def openrouter_model_autocomplete(self, ctx):
         """Autocomplete for OpenRouter image generation models."""
@@ -148,7 +146,10 @@ class UnifiedImageCommands(commands.Cog):
 
         # Format models with current selection marked
         formatted_models = []
-        for model_id in self.openrouter_image_models:
+        model_ids = await self._get_openrouter_image_model_ids()
+        if current_model and current_model not in model_ids:
+            model_ids.insert(0, current_model)
+        for model_id in model_ids:
             if model_id == current_model:
                 formatted_models.append(f"✓ {model_id} (current)")
             else:
@@ -820,4 +821,6 @@ def setup(bot):
         logger.info("Dashboard enabled - /dream_manage commands hidden from Discord.")
 
     bot.add_cog(cog)
+    if cog._openrouter_models_refresher:
+        cog._openrouter_models_refresher.start()
     logger.info("UnifiedImageCommands cog loaded.")

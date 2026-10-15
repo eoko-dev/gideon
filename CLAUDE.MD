@@ -181,7 +181,8 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - `/dream_manage set_provider`, `/dream_manage view_config`, `/dream_manage configure`, `/dream_manage comfyui_*`
 
 9. **`video_commands.py`** - AI video generation via OpenRouter
-   - `/video` - Generate a video from a text prompt; per-invocation overrides for `model` (autocompleted), `duration`, `aspect_ratio`, `resolution`, `audio`, `seed`, and `image_url` (image-to-video)
+   - `/video` - Generate a video from a text prompt; per-invocation overrides for `model` (autocompleted), `duration`, `aspect_ratio`, `resolution` (480p, 720p, 1080p, 2K, or 4K), `audio`, `seed`, and `image_url` (image-to-video)
+   - Model autocomplete reads the client's cached live list; a stale cache refreshes in the background and the first lookup waits at most 2s (Discord's autocomplete deadline is 3s)
    - `/video_manage view_config`, `/video_manage models`, `/video_manage configure` (Admin; hidden when dashboard is enabled)
    - Submits to OpenRouter's async `/api/v1/videos` API, polls every 15s with status updates, then attaches the result (≤25 MB) or links the unsigned URL
    - Persists results as `[video:url]` markers in message history for dashboard playback
@@ -287,7 +288,7 @@ aiohttp web server running in the same event loop as the bot:
 **Video Generation API Endpoints:**
 - `GET /api/video/settings` — Active provider, default config (model, duration, aspect_ratio, resolution, audio), availability flag
 - `PUT /api/video/settings` — Update active provider and/or default config
-- `GET /api/video/models` — Live model list from OpenRouter (`/api/v1/videos/models`) with curated fallback if unreachable
+- `GET /api/video/models` — Live model list from OpenRouter (`/api/v1/videos/models`, cached 10 min; `?refresh=1` forces a refetch). Returns an error instead of a hardcoded fallback if OpenRouter is unreachable
 - `POST /api/video/generate` — Submit a video generation job (returns `job_id`, `status`, `polling_url`)
 - `GET /api/video/jobs/{job_id}` — Poll job status; returns `status` and `unsigned_urls`
 
@@ -480,7 +481,9 @@ When `TOOL_CALLING_ENABLED=TRUE` (or legacy `INTENT_DISCOVERY=TRUE`):
 - `video_active_provider` (string) — `"openrouter"` (only provider currently)
 - `video_config_openrouter` (json) — `{model, duration, aspect_ratio, resolution, audio}` defaults
 
-**Model List Source:** `OpenRouterVideoClient.list_video_models()` calls `/api/v1/videos/models` at runtime; if unreachable, falls back to a curated list (Veo 3.1, Veo 3, Sora 2 Pro, Seedance 2.0/1.5, Wan 2.7/2.6, Kling Video O1).
+**Model List Source:** `OpenRouterVideoClient.list_video_models()` calls `/api/v1/videos/models` and caches the result for 10 minutes. No hardcoded fallback is served. Note the generic `/api/v1/models` endpoint does **not** list video models. `supports_audio` / `supports_image_input` are derived from the API's `generate_audio` and `supported_frame_images` fields.
+
+**Image Model List Source:** `OpenRouterImageClient.get_image_models()` calls `/api/v1/models?output_modalities=image` (cached 10 min) and backs the dashboard (`GET /api/image/models`, `?refresh=1` to refetch) and `/dream_manage configure openrouter` autocomplete. The unfiltered `/api/v1/models` endpoint omits image-only models (FLUX, Seedream, Recraft, etc.). For image-only models the requested `modalities` are narrowed to `["image"]` automatically.
 
 ## Troubleshooting
 

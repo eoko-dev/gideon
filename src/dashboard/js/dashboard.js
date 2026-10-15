@@ -1329,12 +1329,15 @@
             imageModelsCache = models;
             populateImageModelSelect(selectEl, models, currentModel);
         } catch (e) {
-            selectEl.innerHTML = '<option value="">Failed to load models</option>';
+            selectEl.innerHTML = '<option value="">Failed to load models: ' + escapeHtml(e.message) + '</option>';
         }
     }
 
     function populateImageModelSelect(selectEl, models, currentValue) {
         var html = '';
+        if (currentValue && !models.some(function (m) { return (m.id || m) === currentValue; })) {
+            html += '<option value="' + escapeHtml(currentValue) + '" selected>' + escapeHtml('> ' + currentValue + ' (current, not in live list)') + '</option>';
+        }
         models.forEach(function(m) {
             var id = m.id || m;
             var name = m.name || id;
@@ -1486,12 +1489,15 @@
             videoModelsCache = resp.models || [];
             populateVideoModelSelect(selectEl, videoModelsCache, currentModel);
         } catch (e) {
-            selectEl.innerHTML = '<option value="">Failed to load models</option>';
+            selectEl.innerHTML = '<option value="">Failed to load models: ' + escapeHtml(e.message) + '</option>';
         }
     }
 
     function populateVideoModelSelect(selectEl, models, currentValue) {
         var html = '';
+        if (currentValue && !models.some(function (m) { return (m.id || m) === currentValue; })) {
+            html += '<option value="' + escapeHtml(currentValue) + '" selected>' + escapeHtml('> ' + currentValue + ' (current, not in live list)') + '</option>';
+        }
         models.forEach(function (m) {
             var id = m.id || m;
             var name = m.name || id;

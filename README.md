@@ -45,7 +45,7 @@ Gideon transforms your Discord server into an AI-powered hub, connecting members
   + **Conversation**: Any other @mention automatically engages in natural conversation
 * **Web Search** - Search the web for current information through conversational AI responses or natural language (@mention)
 * **Image Generation** - Create stunning visuals using the unified `/dream` command or natural language @mentions. Supports multiple backend providers (AI Horde, Cloudflare Worker, OpenAI DALL-E, ComfyUI, OpenRouter). Admins can configure the active provider and its default settings.
-* **Video Generation** - Generate AI videos with the `/video` command or directly from the dashboard, powered by OpenRouter's asynchronous video API. Supports multiple models (Veo 3.1, Sora 2 Pro, Seedance 2.0/1.5, Wan 2.7/2.6, Kling O1, etc.) with configurable duration, aspect ratio, resolution, audio, seed, and optional reference image (image-to-video).
+* **Video Generation** - Generate AI videos with the `/video` command or directly from the dashboard, powered by OpenRouter's asynchronous video API. Supports multiple models (Veo 3.1, Sora 2 Pro, Seedance 2.0/1.5, Wan 2.7/2.6, Kling O1, etc.) with configurable duration, aspect ratio, resolution (480p, 720p, 1080p, 2K, or 4K), audio, seed, and optional reference image (image-to-video).
 
 ### 🎭 Per-Channel Personas
 
@@ -485,7 +485,7 @@ Configure unique bot identities per channel using Discord webhooks.
 * **ByteDance**: Seedance 2.0, Seedance 1.5
 * **Alibaba**: Wan 2.7, Wan 2.6
 * **Kuaishou**: Kling Video O1
-* **And more** as OpenRouter adds providers — the model picker queries `/api/v1/videos/models` at runtime.
+* **And more** as OpenRouter adds providers — the model picker queries `/api/v1/videos/models` at runtime (no hardcoded fallback list).
 
 ## 📁 Project Structure
 

@@ -23,6 +23,7 @@ from discord.ext import commands
 
 from ..config import DASHBOARD_ENABLED, OPENROUTER_API_KEY
 from ..utils.database import DatabaseManager
+from ..utils.model_list_refresher import ModelListRefresher
 from ..utils.openrouter_video_client import OpenRouterVideoClient
 
 logger = logging.getLogger('video_commands')
@@ -50,6 +51,7 @@ RESOLUTION_CHOICES = [
     discord.OptionChoice(name="480p", value="480p"),
     discord.OptionChoice(name="720p (HD)", value="720p"),
     discord.OptionChoice(name="1080p (Full HD)", value="1080p"),
+    discord.OptionChoice(name="2K", value="2K"),
     discord.OptionChoice(name="4K", value="4K"),
 ]
 DURATION_CHOICES = [
@@ -89,9 +91,6 @@ class VideoCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = DatabaseManager()
-        self._models_cache: Optional[List[Dict[str, Any]]] = None
-        self._models_cache_at: float = 0.0
-
         api_key = OPENROUTER_API_KEY
         if hasattr(bot, 'api_key_service') and bot.api_key_service:
             db_key = bot.api_key_service.get_key_for_provider('openrouter')
@@ -101,6 +100,14 @@ class VideoCommands(commands.Cog):
         self.video_client = OpenRouterVideoClient(api_key) if api_key else None
         if not self.video_client:
             logger.warning("OpenRouter Video client not initialized (API key missing).")
+        self._models_refresher = (
+            ModelListRefresher(self.video_client.list_video_models, "Video")
+            if self.video_client else None
+        )
+
+    def cog_unload(self):
+        if self._models_refresher:
+            self._models_refresher.cancel()
 
     # ── Helpers ────────────────────────────────────────────────
 
@@ -119,24 +126,19 @@ class VideoCommands(commands.Cog):
         return merged
 
     async def _get_models(self) -> List[Dict[str, Any]]:
-        """Cached model list (5 min) for autocomplete."""
-        now = asyncio.get_event_loop().time()
-        if self._models_cache and (now - self._models_cache_at) < 300:
-            return self._models_cache
+        """Live model list for autocomplete, bounded by Discord's response deadline."""
         if not self.video_client:
             return []
-        result = await self.video_client.list_video_models()
-        if result.get("success"):
-            self._models_cache = result.get("models", [])
-            self._models_cache_at = now
-            return self._models_cache
-        return []
+        if self.video_client.models_cache_is_stale():
+            await self._models_refresher.refresh(wait=not self.video_client.get_cached_video_models())
+        return self.video_client.get_cached_video_models()
 
     async def model_autocomplete(self, ctx: discord.AutocompleteContext):
         """Autocomplete for video model picker."""
         try:
             models = await self._get_models()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Video model autocomplete failed: %s", exc)
             models = []
         current = (ctx.value or "").lower()
         results = []
@@ -627,4 +629,6 @@ def setup(bot):
         logger.info("Dashboard enabled - /video_manage commands hidden from Discord.")
 
     bot.add_cog(cog)
+    if cog._models_refresher:
+        cog._models_refresher.start()
     logger.info("VideoCommands cog loaded.")
