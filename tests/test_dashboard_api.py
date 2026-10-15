@@ -45,6 +45,15 @@ class SettingsTests(ApiTestCase):
         self.assertEqual(self.state.get_global_model(), "openrouter/good/model")
         self.assertEqual(self.state.get_global_system_prompt(), "be brief")
 
+    async def test_unchanged_unverifiable_model_does_not_block_save(self):
+        self.state.global_model = "google/gemini-2.0-flash-exp"
+        current = self.state.get_global_model()
+        resp = await self.client.put("/api/settings", json={
+            "global_model": current, "max_channel_history": 20})
+        self.assertEqual(resp.status, 200, await resp.text())
+        self.assertEqual(self.state.get_max_channel_history(), 20)
+        self.assertEqual(self.state.get_global_model(), current)
+
     async def test_one_bad_field_applies_nothing(self):
         before = (self.state.get_max_channel_history(), self.state.get_global_model(),
                   self.state.get_prune_frequency_hours())
@@ -122,6 +131,14 @@ class ChannelAndThreadTests(ApiTestCase):
         self.assertEqual(self.state.get_channel_system_prompt("100"), "channel prompt")
         self.assertEqual(self.state.get_effective_session_timeout("100"), 6)
         self.assertEqual(self.state.get_effective_max_memory_summaries("100"), 4)
+
+    async def test_channel_detail_reports_raw_provider_override(self):
+        body = await (await self.client.get("/api/channels/100")).json()
+        self.assertIsNone(body["provider"])
+        self.assertEqual(body["effective_provider"], self.state.get_global_provider())
+        await self.client.put("/api/channels/100", json={"provider": "openrouter"})
+        body = await (await self.client.get("/api/channels/100")).json()
+        self.assertEqual(body["provider"], "openrouter")
 
     async def test_channel_memory_override_cleared_by_null(self):
         await self.client.put("/api/channels/100", json={

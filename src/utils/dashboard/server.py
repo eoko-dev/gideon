@@ -533,7 +533,7 @@ class DashboardServer:
         errors: Dict[str, str] = {}
         parsed: Dict[str, Any] = {}
 
-        if 'global_model' in data:
+        if 'global_model' in data and data['global_model'] != state.get_global_model():
             error = await self._check_model(data['global_model'])
             if error:
                 errors['global_model'] = error
@@ -663,7 +663,7 @@ class DashboardServer:
         state = self.bot.state_manager
 
         model = state.get_channel_model(channel_id)
-        provider = state.get_channel_provider(channel_id)
+        provider = state.db_manager.get_channel_provider(str(channel_id))
         system_prompt = state.get_channel_system_prompt(channel_id)
         effective_model = state.get_effective_model(channel_id)
 
@@ -696,6 +696,7 @@ class DashboardServer:
             'channel_name': self._channel_info(channel_id)['channel_name'],
             'model': model,
             'provider': provider,
+            'effective_provider': provider or state.get_global_provider(),
             'system_prompt': system_prompt,
             'effective_model': effective_model,
             **memory_config,
@@ -716,7 +717,7 @@ class DashboardServer:
         model = None
         if 'model' in data:
             model = data['model'] or None
-            if model is not None:
+            if model is not None and model != state.get_channel_model(channel_id):
                 error = await self._check_model(model)
                 if error:
                     errors['model'] = error
@@ -844,7 +845,7 @@ class DashboardServer:
         model = None
         if 'model' in data:
             model = data['model'] or None
-            if model is not None:
+            if model is not None and model != (state.get_discord_thread_config(thread_id) or {}).get('model'):
                 error = await self._check_model(model)
                 if error:
                     errors['model'] = error
