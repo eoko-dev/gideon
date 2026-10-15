@@ -83,11 +83,19 @@
         return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    var HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
     function escapeHtml(str) {
-        if (!str) return '';
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
+        if (str === null || str === undefined) return '';
+        return String(str).replace(/[&<>"']/g, function(c) { return HTML_ESCAPES[c]; });
+    }
+
+    function actionAttrs(action, args) {
+        var attrs = ' data-action="' + escapeHtml(action) + '"';
+        (args || []).forEach(function(arg, i) {
+            attrs += ' data-arg' + i + '="' + escapeHtml(arg) + '"';
+        });
+        return attrs;
     }
 
     function showSaveStatus(elementId, message, isError) {
@@ -418,7 +426,7 @@
                     '<td>' + (ch.model ? '<span class="code">' + escapeHtml(ch.model) + '</span>' : '<span class="text-muted">Global</span>') + '</td>' +
                     '<td>' + (ch.provider ? escapeHtml(ch.provider) : '<span class="text-muted">Global</span>') + '</td>' +
                     '<td><span class="badge ' + statusClass + '">' + statusLabel + '</span></td>' +
-                    '<td><button class="btn btn-small btn-secondary" onclick="window._editChannel(\'' + escapeHtml(ch.channel_id) + '\')">Edit</button></td>' +
+                    '<td><button class="btn btn-small btn-secondary" ' + actionAttrs('editChannel', [ch.channel_id]) + '>Edit</button></td>' +
                     '</tr>';
             });
 
@@ -506,8 +514,8 @@
                     '<td>' + escapeHtml(t.guild_name || 'Unknown') + '</td>' +
                     '<td>' + (t.message_count || 0) + '</td>' +
                     '<td>' + (t.model ? '<span class="code">' + escapeHtml(t.model) + '</span>' : '<span class="text-muted">Default</span>') + '</td>' +
-                    '<td>' + created + '</td>' +
-                    '<td><button class="btn btn-small btn-secondary" onclick="window._editThread(\'' + escapeHtml(t.thread_id) + '\')">Edit</button></td>' +
+                    '<td>' + escapeHtml(created) + '</td>' +
+                    '<td><button class="btn btn-small btn-secondary" ' + actionAttrs('editThread', [t.thread_id]) + '>Edit</button></td>' +
                     '</tr>';
             });
 
@@ -658,7 +666,7 @@
 
             var html = '';
             data.messages.forEach(function(msg) {
-                var roleClass = 'msg-role-' + (msg.role || 'user');
+                var roleClass = 'msg-role-' + escapeHtml(msg.role || 'user');
                 var roleBadge = msg.role || 'unknown';
                 var timeStr = formatDateTime(msg.timestamp);
                 var channelInfo = '';
@@ -674,11 +682,12 @@
 
                 // Check for image markers: [image:url] or [image:attachment]
                 var imageHtml = '';
-                var imageMatch = content.match(/^\[image:(.*?)\]\s*/);
+                var isAssistant = msg.role === 'assistant';
+                var imageMatch = isAssistant ? content.match(/^\[image:(.*?)\]\s*/) : null;
                 if (imageMatch) {
-                    var imageRef = imageMatch[1];
+                    var imageRef = sanitizeHttpUrl(imageMatch[1]);
                     content = content.substring(imageMatch[0].length);
-                    if (imageRef && imageRef !== 'attachment' && imageRef.startsWith('http')) {
+                    if (imageRef) {
                         imageHtml = '<div class="msg-image"><a href="' + escapeHtml(imageRef) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(imageRef) + '" alt="Generated image" loading="lazy"></a></div>';
                     } else {
                         imageHtml = '<div class="msg-image-placeholder">Generated image (attachment - not available in dashboard)</div>';
@@ -687,11 +696,11 @@
 
                 // Check for video markers: [video:url] or [video:attachment]
                 var videoHtml = '';
-                var videoMatch = content.match(/^\[video:(.*?)\]\s*/);
+                var videoMatch = isAssistant ? content.match(/^\[video:(.*?)\]\s*/) : null;
                 if (videoMatch) {
-                    var videoRef = videoMatch[1];
+                    var videoRef = sanitizeHttpUrl(videoMatch[1]);
                     content = content.substring(videoMatch[0].length);
-                    if (videoRef && videoRef !== 'attachment' && videoRef.startsWith('http')) {
+                    if (videoRef) {
                         videoHtml = '<div class="msg-image"><video controls preload="metadata" style="max-width:100%;border-radius:8px;"><source src="' + escapeHtml(videoRef) + '" type="video/mp4"></video><div><a href="' + escapeHtml(videoRef) + '" target="_blank" rel="noopener">Open video in new tab</a></div></div>';
                     } else {
                         videoHtml = '<div class="msg-image-placeholder">Generated video (attachment - not available in dashboard)</div>';
@@ -764,18 +773,18 @@
             var html = '';
 
             html += '<div class="diag-section"><h4>Bot Status</h4>';
-            html += diagItem('Status', statusDot(data.bot_status === 'online' ? 'ok' : 'warn') + ' ' + data.bot_status);
-            html += diagItem('Latency', data.latency_ms !== null ? data.latency_ms + ' ms' : 'N/A');
-            html += diagItem('Servers', data.guilds);
-            html += diagItem('Uptime', formatUptime(data.uptime_seconds));
+            html += diagItem('Status', statusDot(data.bot_status === 'online' ? 'ok' : 'warn') + ' ' + escapeHtml(data.bot_status));
+            html += diagItem('Latency', escapeHtml(data.latency_ms !== null ? data.latency_ms + ' ms' : 'N/A'));
+            html += diagItem('Servers', escapeHtml(data.guilds));
+            html += diagItem('Uptime', escapeHtml(formatUptime(data.uptime_seconds)));
             html += '</div>';
 
             if (data.database) {
                 html += '<div class="diag-section"><h4>Database</h4>';
-                html += diagItem('Status', statusDot(data.database.status === 'ok' ? 'ok' : 'error') + ' ' + data.database.status);
-                html += diagItem('Messages', data.database.message_count);
-                html += diagItem('Threads', data.database.thread_count);
-                html += diagItem('File Size', formatBytes(data.database.file_size_bytes));
+                html += diagItem('Status', statusDot(data.database.status === 'ok' ? 'ok' : 'error') + ' ' + escapeHtml(data.database.status));
+                html += diagItem('Messages', escapeHtml(data.database.message_count));
+                html += diagItem('Threads', escapeHtml(data.database.thread_count));
+                html += diagItem('File Size', escapeHtml(formatBytes(data.database.file_size_bytes)));
                 html += '</div>';
             }
 
@@ -785,19 +794,19 @@
                     var p = data.providers[name];
                     var status = p.status === 'ok' ? 'ok' : (p.status === 'configured' ? 'warn' : 'error');
                     var detail = p.model_count ? p.model_count + ' models' : (p.error || p.status);
-                    html += diagItem(name, statusDot(status) + ' ' + detail);
+                    html += diagItem(name, statusDot(status) + ' ' + escapeHtml(detail));
                 });
                 html += '</div>';
             }
 
             if (data.settings) {
                 html += '<div class="diag-section"><h4>Current Settings</h4>';
-                html += diagItem('Model', data.settings.global_model);
-                html += diagItem('Provider', data.settings.global_provider);
-                html += diagItem('History Limit', data.settings.max_channel_history);
-                html += diagItem('Time Window', data.settings.time_window_hours + 'h');
-                html += diagItem('Prune Every', data.settings.prune_frequency_hours + 'h');
-                html += diagItem('Intent Detection', data.settings.tool_calling_enabled ? 'Enabled' : 'Disabled');
+                html += diagItem('Model', escapeHtml(data.settings.global_model));
+                html += diagItem('Provider', escapeHtml(data.settings.global_provider));
+                html += diagItem('History Limit', escapeHtml(data.settings.max_channel_history));
+                html += diagItem('Time Window', escapeHtml(data.settings.time_window_hours + 'h'));
+                html += diagItem('Prune Every', escapeHtml(data.settings.prune_frequency_hours + 'h'));
+                html += diagItem('Intent Detection', escapeHtml(data.settings.tool_calling_enabled ? 'Enabled' : 'Disabled'));
                 html += '</div>';
             }
 
@@ -875,8 +884,8 @@
                 html += '<p class="persona-template-desc">' + escapeHtml(t.description) + '</p>';
             }
             html += '<div class="persona-template-actions">';
-            html += '<button class="btn btn-small btn-secondary" onclick="window._editTemplate(\'' + escapeHtml(t.template_id) + '\')">Edit</button>';
-            html += '<button class="btn btn-small btn-primary" onclick="window._applyTemplatePrompt(\'' + escapeHtml(t.template_id) + '\')">Apply to Channel</button>';
+            html += '<button class="btn btn-small btn-secondary" ' + actionAttrs('editTemplate', [t.template_id]) + '>Edit</button>';
+            html += '<button class="btn btn-small btn-primary" ' + actionAttrs('applyTemplatePrompt', [t.template_id]) + '>Apply to Channel</button>';
             html += '</div>';
             html += '</div>';
         });
@@ -918,7 +927,7 @@
             var channelName = p.channel_name ? '#' + p.channel_name : 'ID:' + p.channel_id;
             var statusClass = p.is_active ? 'badge-accent' : 'badge-default';
             var statusLabel = p.is_active ? 'Active' : 'Inactive';
-            var templateName = p.template_name || '<span class="text-muted">Custom</span>';
+            var templateName = p.template_name ? escapeHtml(p.template_name) : '<span class="text-muted">Custom</span>';
 
             html += '<tr>';
             html += '<td>' + escapeHtml(channelName) + '</td>';
@@ -926,8 +935,8 @@
             html += '<td>' + templateName + '</td>';
             html += '<td><span class="badge ' + statusClass + '">' + statusLabel + '</span></td>';
             html += '<td>';
-            html += '<button class="btn btn-small btn-secondary" onclick="window._editPersona(\'' + escapeHtml(p.channel_id) + '\')">Edit</button> ';
-            html += '<button class="btn btn-small btn-' + (p.is_active ? 'warning' : 'primary') + '" onclick="window._togglePersona(\'' + escapeHtml(p.channel_id) + '\')">' + (p.is_active ? 'Disable' : 'Enable') + '</button>';
+            html += '<button class="btn btn-small btn-secondary" ' + actionAttrs('editPersona', [p.channel_id]) + '>Edit</button> ';
+            html += '<button class="btn btn-small btn-' + (p.is_active ? 'warning' : 'primary') + '" ' + actionAttrs('togglePersona', [p.channel_id]) + '>' + (p.is_active ? 'Disable' : 'Enable') + '</button>';
             html += '</td>';
             html += '</tr>';
         });
@@ -1851,9 +1860,9 @@
                         '</div>' +
                     '</div>' +
                     '<div class="key-card-actions">' +
-                        '<button class="btn btn-small btn-secondary" onclick="window._validateKey(\'' + escapeHtml(key.key_id) + '\')">Test</button>' +
-                        '<button class="btn btn-small btn-secondary" onclick="window._editKey(\'' + escapeHtml(key.key_id) + '\', \'' + escapeHtml(key.provider) + '\', \'' + escapeHtml(key.key_alias || '') + '\', ' + (key.is_active ? 'true' : 'false') + ')">Edit</button>' +
-                        '<button class="btn btn-small btn-danger" onclick="window._deleteKey(\'' + escapeHtml(key.key_id) + '\', \'' + escapeHtml(key.provider) + '\')">Delete</button>' +
+                        '<button class="btn btn-small btn-secondary" ' + actionAttrs('validateKey', [key.key_id]) + '>Test</button>' +
+                        '<button class="btn btn-small btn-secondary" ' + actionAttrs('editKey', [key.key_id, key.provider, key.key_alias || '']) + '>Edit</button>' +
+                        '<button class="btn btn-small btn-danger" ' + actionAttrs('deleteKey', [key.key_id, key.provider]) + '>Delete</button>' +
                     '</div>' +
                 '</div>';
             });
@@ -2302,7 +2311,7 @@
                     html += '<ul>';
                     var counts = info.table_counts;
                     for (var table in counts) {
-                        html += '<li>' + table + ': ' + counts[table] + ' rows</li>';
+                        html += '<li>' + escapeHtml(table) + ': ' + escapeHtml(counts[table]) + ' rows</li>';
                     }
                     html += '</ul>';
                 }
@@ -2383,7 +2392,31 @@
         });
     }
 
+    var ACTIONS = {
+        editChannel: function(a) { editChannel(a[0]); },
+        editThread: function(a) { editThread(a[0]); },
+        editTemplate: function(a) { editTemplate(a[0]); },
+        applyTemplatePrompt: function(a) { applyTemplatePrompt(a[0]); },
+        editPersona: function(a) { editPersona(a[0]); },
+        togglePersona: function(a) { togglePersona(a[0]); },
+        validateKey: function(a) { window._validateKey(a[0]); },
+        editKey: function(a) { window._editKey(a[0], a[1], a[2]); },
+        deleteKey: function(a) { window._deleteKey(a[0], a[1]); },
+        viewChannelMemories: function(a) { window.viewChannelMemories(a[0], a[1]); },
+        loadMemoryStats: function() { window.loadMemoryStats(); },
+    };
+
+    function handleActionClick(e) {
+        var el = e.target.closest('[data-action]');
+        if (!el || !ACTIONS.hasOwnProperty(el.dataset.action)) return;
+        var args = [];
+        for (var i = 0; ('arg' + i) in el.dataset; i++) args.push(el.dataset['arg' + i]);
+        ACTIONS[el.dataset.action](args);
+    }
+
     function init() {
+        document.addEventListener('click', handleActionClick);
+        bindEvent('#channel-filter-override', 'change', renderChannels);
         // Login form
         $('#login-form').addEventListener('submit', async function (e) {
             e.preventDefault();
@@ -2634,9 +2667,9 @@
                 var latest = s.latest_summary_at ? String(s.latest_summary_at).substring(0, 16) : '—';
                 return '<tr>' +
                     '<td>' + name + '</td>' +
-                    '<td>' + s.summary_count + '</td>' +
-                    '<td>' + latest + '</td>' +
-                    '<td><button class="btn btn-secondary btn-small" onclick="window.viewChannelMemories(\'' + escapeHtml(s.channel_id) + '\', \'' + name + '\')">View</button></td>' +
+                    '<td>' + escapeHtml(s.summary_count) + '</td>' +
+                    '<td>' + escapeHtml(latest) + '</td>' +
+                    '<td><button class="btn btn-secondary btn-small" ' + actionAttrs('viewChannelMemories', [s.channel_id, s.channel_name || s.channel_id]) + '>View</button></td>' +
                     '</tr>';
             });
             container.innerHTML = '<table class="data-table"><thead><tr><th>Channel</th><th>Summaries</th><th>Latest</th><th></th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
@@ -2665,7 +2698,7 @@
                 var ts = String(m.conversation_start || m.created_at || '').substring(0, 16);
                 var label = m.conversation_start ? 'Conversation on' : 'Archived';
                 return '<div class="memory-entry">' +
-                    '<div class="memory-meta">' + label + ' ' + ts + ' &bull; ' + m.message_count + ' messages</div>' +
+                    '<div class="memory-meta">' + label + ' ' + escapeHtml(ts) + ' &bull; ' + escapeHtml(m.message_count) + ' messages</div>' +
                     '<div class="memory-summary">' + escapeHtml(m.summary) + '</div>' +
                     '</div>';
             }).join('');

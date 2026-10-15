@@ -383,7 +383,7 @@
                     </div>
                     <div class="filter-group">
                         <label for="channel-filter-override">Status</label>
-                        <select id="channel-filter-override" onchange="window._filterChannels()">
+                        <select id="channel-filter-override">
                             <option value="all">All Channels</option>
                             <option value="customized">Customized Only</option>
                             <option value="default">Global Default Only</option>
@@ -1002,7 +1002,7 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>Memory Overview</h3>
-                        <button class="btn btn-secondary btn-small" onclick="window.loadMemoryStats()">Refresh</button>
+                        <button class="btn btn-secondary btn-small" data-action="loadMemoryStats">Refresh</button>
                     </div>
                     <div class="card-body">
                         <div id="memory-stats-list">
