@@ -224,9 +224,10 @@ class DatabaseManager:
             self._ensure_channel_exists(channel_id)
         return self._messages.add_message(role, content, timestamp, channel_id, thread_id, user_id, user_name)
 
-    def get_channel_history(self, channel_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_channel_history(self, channel_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None,
+                            until: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific channel."""
-        return self._messages.get_channel_history(channel_id, limit, hours_limit)
+        return self._messages.get_channel_history(channel_id, limit, hours_limit, until)
 
     def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific thread."""

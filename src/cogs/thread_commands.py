@@ -3,7 +3,7 @@ import discord
 import logging
 from discord.ext import commands
 from ..utils.discord_fmt import chunk_message
-from ..utils.llm_formatting import resolve_discord_mentions
+from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
 from ..config import SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -670,8 +670,9 @@ class ThreadCommands(commands.Cog):
                     # timestamp is set in the state manager/database
                 })
 
-                # Split response into chunks
-                chunks = chunk_message(response)
+                # Split response into chunks, turning '@Name' into real pings
+                targets = collect_mention_targets(conversation_context, [message.author, *message.mentions])
+                chunks = chunk_message(apply_outbound_mentions(response, targets))
 
                 # Check if persona is active for the parent channel
                 auto_parent_id = str(message.channel.parent_id) if isinstance(message.channel, discord.Thread) else str(message.channel.id)

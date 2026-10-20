@@ -55,8 +55,13 @@ class MessageManager:
             logger.error(f"Error adding message for {'channel ' + str(channel_id) if channel_id else 'thread ' + str(thread_id)}: {e}", exc_info=True)
             raise
 
-    def _get_history(self, entity_id: str, id_column: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Internal helper to get message history for a channel or thread."""
+    def _get_history(self, entity_id: str, id_column: str, limit: Optional[int] = None,
+                     hours_limit: Optional[int] = None, until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Internal helper to get message history for a channel or thread.
+
+        ``until`` caps the history at a given timestamp (inclusive) so a reply
+        never sees messages that arrived after the one it is answering.
+        """
         base_sql = f"SELECT role, content, timestamp, user_id, user_name AS name FROM MESSAGES WHERE {id_column} = ?"
         params: List[Any] = [entity_id]
 
@@ -64,6 +69,10 @@ class MessageManager:
             cutoff_time = datetime.now() - timedelta(hours=hours_limit)
             base_sql += " AND timestamp >= ?"
             params.append(cutoff_time)
+
+        if until is not None:
+            base_sql += " AND timestamp <= ?"
+            params.append(until)
 
         base_sql += " ORDER BY timestamp DESC"  # Get latest first
 
@@ -92,9 +101,10 @@ class MessageManager:
             logger.error(f"Error getting history for {id_column} '{entity_id}': {e}", exc_info=True)
             return []
 
-    def get_channel_history(self, channel_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_channel_history(self, channel_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None,
+                            until: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific channel."""
-        return self._get_history(channel_id, "channel_id", limit, hours_limit)
+        return self._get_history(channel_id, "channel_id", limit, hours_limit, until)
 
     def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific thread."""

@@ -8,12 +8,12 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
-from ..utils.memory_service import check_and_rotate_session, maybe_compact_history
+from ..utils.memory_service import check_and_rotate_session, schedule_compaction
 from ..utils.discord_fmt import chunk_message
 from ..utils.timeutil import to_epoch
 from ..utils.tool_registry import get_tool_definitions, execute_tool, is_no_repeat_tool
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..utils.llm_formatting import resolve_discord_mentions
+from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
 from ..config import DEFAULT_MODEL
 
 logger = logging.getLogger('mention_commands')
@@ -33,6 +33,10 @@ class MentionCommands(commands.Cog):
         # Channels the bot participates in — history is only recorded for
         # these, so the bot doesn't log every channel it can merely see.
         self._active_channels: Optional[set] = None
+        # Message id -> timestamp its history row was stored with. Replies
+        # read history up to that point only, so messages that land while a
+        # reply is in flight can't be mistaken for the turn being answered.
+        self._history_anchors: Dict[int, datetime] = {}
 
     def get_model_for_channel(self, channel_id):
         """Get the appropriate model for this channel"""
@@ -45,6 +49,17 @@ class MentionCommands(commands.Cog):
         """Removes the bot's mention tokens from message content."""
         content = content.replace(f'<@{self.bot.user.id}>', '').replace(f'<@!{self.bot.user.id}>', '')
         return content.strip()
+
+    def _history_for(self, message: discord.Message, channel_id: str) -> List[Dict[str, Any]]:
+        """Channel history as of the message being answered."""
+        return self.state.get_channel_history(channel_id, until=self._history_anchors.get(message.id))
+
+    async def _send_reply(self, message: discord.Message, channel_id: str,
+                          text: str, history: List[Dict[str, Any]]):
+        """Sends an LLM reply in chunks, turning '@Name' into real pings."""
+        text = apply_outbound_mentions(text, collect_mention_targets(history, [message.author, *message.mentions]))
+        for chunk in chunk_message(text):
+            await self.bot.webhook_sender.send_response(message.channel, chunk, channel_id)
 
     # ─── History recording guard ────────────────────────────────────────────
 
@@ -95,7 +110,7 @@ class MentionCommands(commands.Cog):
             return
 
         channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=content)
-        conversation_context = self.state.get_channel_history(channel_id)
+        conversation_context = self._history_for(message, channel_id)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -118,8 +133,7 @@ class MentionCommands(commands.Cog):
                 "timestamp": datetime.now()
             })
 
-            for chunk in chunk_message(full_response):
-                await self.bot.webhook_sender.send_response(message.channel, chunk, channel_id)
+            await self._send_reply(message, channel_id, full_response, conversation_context)
 
         except Exception as e:
             logger.exception(f"[Mention] Error in fallback conversation: {e}")
@@ -571,7 +585,7 @@ class MentionCommands(commands.Cog):
         search_system_prompt = build_search_system_prompt(channel_system_prompt)
 
         # Get conversation context
-        conversation_context = self.state.get_channel_history(channel_id)
+        conversation_context = self._history_for(message, channel_id)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -787,27 +801,34 @@ class MentionCommands(commands.Cog):
                 logger.error(f"[Mention] Error during session rotation for channel {channel_id}: {e}", exc_info=True)
 
             try:
-                await self.state.add_to_channel_history(channel_id, {
+                recorded_at = await self.state.add_to_channel_history(channel_id, {
                     "role": "user",
                     "name": message.author.display_name,
                     "user_id": str(message.author.id),
                     "content": resolve_discord_mentions(message),
                     "timestamp": datetime.now()
                 })
-                recorded = True
+                recorded = recorded_at is not None
             except Exception as e:
                 logger.error(f"[Mention] Error adding message to history for channel {channel_id}: {e}", exc_info=True)
 
             # Compact oversized histories into a memory summary so long-running
-            # sessions don't silently lose context off the end of the window
-            try:
-                await maybe_compact_history(channel_id, self.state, self.clients)
-            except Exception as e:
-                logger.error(f"[Mention] Error compacting history for channel {channel_id}: {e}", exc_info=True)
+            # sessions don't silently lose context off the end of the window.
+            # Runs in the background so the summarization call never delays a reply.
+            schedule_compaction(channel_id, self.state, self.clients)
 
         if not is_mentioned or message.mention_everyone:
             return
 
+        if recorded:
+            self._history_anchors[message.id] = recorded_at
+        try:
+            await self._respond_to_mention(message, channel_id, recorded)
+        finally:
+            self._history_anchors.pop(message.id, None)
+
+    async def _respond_to_mention(self, message: discord.Message, channel_id: str, recorded: bool):
+        """Generates and sends the reply to a message that mentioned the bot."""
         # Ensure state manager is available before proceeding
         if not self.state:
             logger.error("[Mention] State manager not available when processing mention.")
@@ -852,11 +873,14 @@ class MentionCommands(commands.Cog):
             # with memory summaries relevant to the current message appended
             channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=content)
 
-            # Get recent channel context from state manager
-            conversation_context = self.state.get_channel_history(channel_id)
+            # Channel context up to and including this mention. Anchoring
+            # matters: without it, messages from other users that arrive while
+            # this reply is in flight end up after the mention, and the model
+            # answers them instead of the person who summoned it.
+            conversation_context = self._history_for(message, channel_id)
 
-            # Mentions are always recorded above, so history already ends with
-            # this turn, labelled with the speaker's name by the client. Only
+            # Mentions are recorded above, so history already ends with this
+            # turn, labelled with the speaker's name by the client. Only
             # append it here if that write failed, so the model still sees it.
             if not recorded:
                 conversation_context.append({
@@ -914,8 +938,7 @@ class MentionCommands(commands.Cog):
                 })
 
                 # Send in Discord-sized chunks via persona webhook if configured
-                for chunk in chunk_message(response):
-                    await self.bot.webhook_sender.send_response(message.channel, chunk, channel_id)
+                await self._send_reply(message, channel_id, response, conversation_context)
             else:
                 logger.error(f"[Mention] Unexpected response type: {type(response)}")
                 await message.channel.send("⚠️ An unexpected response format was received.")

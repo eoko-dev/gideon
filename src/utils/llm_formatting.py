@@ -102,3 +102,45 @@ def resolve_discord_mentions(message) -> str:
     content = _ROLE_MENTION_RE.sub(replace_role, content)
     content = _CHANNEL_MENTION_RE.sub(replace_channel, content)
     return content
+
+
+def collect_mention_targets(history: List[Dict[str, Any]], users=()) -> Dict[str, str]:
+    """Maps lowercase display names to user ids for everyone in the conversation.
+
+    Sources are stored history rows (which keep each speaker's id and name)
+    plus any extra Discord users, e.g. the triggering message's author and
+    the people it mentioned. Bots are skipped so the model can't ping itself.
+    """
+    targets: Dict[str, str] = {}
+    for row in history or []:
+        name, user_id = row.get("name"), row.get("user_id")
+        if row.get("role") == "user" and name and user_id:
+            targets[name.lower()] = str(user_id)
+
+    for user in users:
+        if user is None or getattr(user, "bot", False):
+            continue
+        for name in {getattr(user, "display_name", None), getattr(user, "name", None)}:
+            if name:
+                targets[name.lower()] = str(user.id)
+    return targets
+
+
+def apply_outbound_mentions(text: str, targets: Dict[str, str]) -> str:
+    """Turns '@Name' written by the model into a real '<@id>' Discord ping.
+
+    The model only ever sees readable '@Name' text (resolve_discord_mentions
+    strips the raw ids), so it can't produce a ping on its own. Only names of
+    known conversation participants are converted; longest names are matched
+    first so 'Ann Lee' wins over 'Ann', and a match must stand alone as a
+    word ('@Anna' and 'me@ann.com' are left untouched).
+    """
+    if not text or not targets:
+        return text
+
+    names = sorted(targets, key=len, reverse=True)
+    pattern = re.compile(
+        r"(?<![\w@<])@(" + "|".join(re.escape(name) for name in names) + r")(?![\w])",
+        re.IGNORECASE,
+    )
+    return pattern.sub(lambda m: f"<@{targets[m.group(1).lower()]}>", text)
