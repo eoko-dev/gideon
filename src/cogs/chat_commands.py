@@ -6,8 +6,9 @@ import re  # Add this import here
 import logging
 from discord.ext import commands
 from ..utils.state_manager import BotStateManager
-from ..utils.memory_service import check_and_rotate_session, maybe_compact_history
+from ..utils.memory_service import check_and_rotate_session, schedule_compaction
 from ..utils.discord_fmt import chunk_message
+from ..utils.llm_formatting import collect_mention_targets, apply_outbound_mentions
 # Changed to absolute import: from ..utils.conversation import get_channel_context
 # Removed import for conversation, now handled by state_manager
 from ..utils.openrouter_client import OpenRouterClient
@@ -276,11 +277,9 @@ class ChatCommands(commands.Cog):
                 "timestamp": datetime.now()
             })
 
-            # Compact oversized histories into a memory summary
-            try:
-                await maybe_compact_history(channel_id, self.state, self.clients)
-            except Exception as e:
-                logger.error(f"Error compacting history for channel {channel_id}: {e}", exc_info=True)
+            # Compact oversized histories into a memory summary (in the
+            # background, so summarization never delays this reply)
+            schedule_compaction(channel_id, self.state, self.clients)
 
             # Format the final query with the current user's question
             conversation_context.append({
@@ -358,7 +357,8 @@ class ChatCommands(commands.Cog):
                                 await ctx.channel.send(embed=embed)
                 else:
                     logger.info(f"Using standard formatting for model {model_id_full}")
-                    chunks = chunk_message(response)
+                    targets = collect_mention_targets(conversation_context, [ctx.author])
+                    chunks = chunk_message(apply_outbound_mentions(response, targets))
 
                     if persona_active:
                         # Delete processing message, send all chunks via webhook

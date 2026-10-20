@@ -357,15 +357,22 @@ class BotStateManager:
 
     # --- Channel History Methods ---
 
-    def get_channel_history(self, channel_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Gets message history for a channel from the database."""
+    def get_channel_history(self, channel_id: str, limit: Optional[int] = None,
+                            until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Gets message history for a channel from the database.
+
+        Pass ``until`` (the timestamp returned by add_to_channel_history) to
+        exclude messages recorded after the one being answered.
+        """
         # Use configured history limit if no specific limit is passed
         effective_limit = limit if limit is not None else self.max_channel_history
-        # Pass time window limit as well? Or rely on pruning? Let's rely on pruning for now.
-        return self.db_manager.get_channel_history(str(channel_id), limit=effective_limit)
+        return self.db_manager.get_channel_history(str(channel_id), limit=effective_limit, until=until)
 
-    async def add_to_channel_history(self, channel_id: str, message: Dict[str, Any]):
-        """Adds a message to the channel history in the database."""
+    async def add_to_channel_history(self, channel_id: str, message: Dict[str, Any]) -> Optional[datetime]:
+        """Adds a message to the channel history in the database.
+
+        Returns the timestamp the row was stored with, or None if it was skipped.
+        """
         # Extract relevant fields from the message dict
         role = message.get("role")
         content = message.get("content")
@@ -375,7 +382,7 @@ class BotStateManager:
 
         if not role or not content:
              logger.error(f"Message missing role or content: {message}")
-             return # Don't add incomplete messages
+             return None # Don't add incomplete messages
 
         # The DB call is synchronous — run it off the event loop
         await asyncio.to_thread(
@@ -387,6 +394,7 @@ class BotStateManager:
             user_id=user_id,
             user_name=user_name
         )
+        return timestamp
 
     def clear_channel_history(self, channel_id: str) -> bool:
         """Clears history for a channel by deleting messages from the database."""
