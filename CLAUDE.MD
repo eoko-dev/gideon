@@ -84,17 +84,25 @@ Environment-based configuration loading:
 - `get_active_provider()` - Returns current AI provider client
 - `get_effective_persona(channel_id)` - Returns active persona for a channel or None
 - `get_effective_model(channel_id)` - Returns model, respecting persona model overrides
-- `get_effective_system_prompt(channel_id)` - Returns resolved system prompt with channel memory block appended
+- `get_effective_system_prompt(channel_id, query, speaker_id, history, base_prompt)` - Returns resolved system prompt with the channel memory block appended and, when `speaker_id` is given, a `--- People in this channel ---` block (speaker's notes in full, short notes for other speakers in `history`). `base_prompt` replaces the persona/channel/global prompt (used for a thread's own prompt)
 - `get_effective_session_timeout(channel_id)` - Returns session timeout hours (channel override → global)
 - `get_effective_memory_summary_enabled(channel_id)` - Returns bool (channel override → global)
 - `get_effective_max_memory_summaries(channel_id)` - Returns summary cap (channel override → global)
 - `get_channel_memories(channel_id, limit)` / `add_channel_memory(...)` / `prune_channel_memories(...)` - Memory CRUD delegation
+- `get_full_channel_history(channel_id, until)` - Every stored message, ignoring the history window (used when archiving to memory)
+- `delete_channel_messages_through(channel_id, message_pk, before_timestamp)` - Deletes exactly the rows that were read and summarized
+- `prune_old_data(retain_channel_ids, message_cutoff, retain_thread_ids)` - Time-window prune; retained channels/threads keep their messages. Callers should use `memory_service.archive_and_prune()` instead
+- `get_memory_scope(channel_id)` - The channel whose per-user memory a conversation belongs to: a thread maps to its parent (via `THREADS`, or the Discord resolver set with `set_channel_resolver(bot.get_channel)`); any other channel is its own scope
+- `get_user_notes(channel_id, user_id)` / `get_user_notes_for(channel_id, user_ids)` / `set_user_notes(...)` / `delete_user_notes(...)` / `list_channel_user_notes(...)` / `delete_channel_user_notes(...)` - Per-user notes, always resolved through `get_memory_scope()`
+- `delete_user_notes_everywhere(user_id)`, `is_user_memory_opted_out(user_id)`, `set_user_memory_opt_out(user_id, bool)` - Opt-out lives in `USERS.preferences_json` (`memory_opt_out`); opting out also deletes the user's notes everywhere
+- `get_effective_user_memory_enabled(channel_id)` - Per-user memory flag (channel override of the scope → global)
 - `reinitialize_state()` - Reloads all config from database (called after backup restore)
 
 **Memory Config Keys** (`GLOBAL_CONFIG` table):
 - `session_timeout_hours` (int, default 24) — Hours of silence before a channel session is considered expired
 - `memory_summary_enabled` (bool, default True) — Whether expired sessions are auto-summarized before clearing
 - `max_memory_summaries` (int, default 10) — Maximum number of memory summaries retained per channel
+- `user_memory_enabled` (bool, default True) — Whether per-user notes are kept (per-channel override in `CHANNEL_CONFIG.user_memory_enabled`)
 
 #### 4. Provider Management (`src/utils/model_manager.py`)
 `ProviderManager` handles multiple AI providers:
@@ -124,6 +132,8 @@ Core tables:
 - `PERSONA_TEMPLATES` - Built-in and custom persona templates (name, display_name, avatar_url, system_prompt, model, is_builtin)
 - `CHANNEL_PERSONAS` - Per-channel persona configuration (display_name, avatar_url, system_prompt, model_override, webhook_id, webhook_token, is_active)
 - `CHANNEL_MEMORY` - Long-term per-channel memory summaries (channel_id, summary, message_count, conversation_start, created_at); not pruned by the time-window prune — persists until `max_memory_summaries` cap or manual deletion
+- `CHANNEL_USER_MEMORY` - Per-user notes scoped to one channel; `PRIMARY KEY (channel_id, user_id)` (notes as a bullet list, display_name, message_count, created_at, updated_at). A user's notes in one channel are never read for another. Excluded from config JSON exports
+- `MESSAGES.is_bot` - Set for messages from bots/webhooks, which never get per-user notes
 
 #### Database Managers
 - `core.py` - `DatabaseManager` orchestrator; delegates to all sub-managers
@@ -138,6 +148,7 @@ Core tables:
 - `persona_manager.py` - Persona template and channel persona CRUD
 - `backup_manager.py` - Config JSON export/import/validation and SQLite backup/restore
 - `memory_manager.py` - Long-term channel memory CRUD (`get_memories`, `add_memory`, `delete_memories`, `prune_memories`, `get_all_memory_stats`)
+- `user_memory_manager.py` - Per-user, per-channel notes (`db.user_memory`). Every read/write requires both `channel_id` and `user_id` (raises `ValueError` otherwise); only deletes take a bare `user_id`
 
 ### Command Modules (`src/cogs/`)
 
@@ -147,7 +158,8 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - `/admin sync`, `/admin debug`, `/admin state`, `/admin diagnostic`, `/admin vision_models`
 
 2. **`chat_commands.py`** - Core AI conversation features
-   - `/chat`, `/reset`, `/summarize`, `/memory`
+   - `/chat`, `/reset`, `/summarize`
+   - `/memory status` (channel memory status), `/memory me` (your notes here, ephemeral), `/memory forget [this channel|everywhere]`, `/memory optout`, `/memory optin`, `/memory forget_user` (admin, this channel)
    - Checks for active persona per channel and routes responses through `WebhookSender`
 
 3. **`mention_commands.py`** - Handles @mentions of the bot
@@ -308,12 +320,18 @@ aiohttp web server running in the same event loop as the bot:
 - `GET /api/memory/{channel_id}` — Get all summaries for a channel (id, summary, message_count, conversation_start, created_at)
 - `DELETE /api/memory/{channel_id}` — Clear all memories for a channel
 - `POST /api/memory/{channel_id}/summarize` — Manually trigger summarization of current history and clear it
+- `GET /api/memory/{channel_id}/users` — Per-user notes kept for a channel (`enabled`, `users[]`)
+- `PUT /api/memory/{channel_id}/users/{user_id}` — Replace one user's notes in that channel (`{notes}`; 404 if none exist)
+- `DELETE /api/memory/{channel_id}/users/{user_id}` — Delete one user's notes in that channel
+- `DELETE /api/memory/{channel_id}/users` — Delete every user's notes in that channel
 
-The `GET/PUT /api/settings` and `GET/PUT /api/channels/{id}` endpoints also include the three memory config fields: `session_timeout_hours`, `memory_summary_enabled`, `max_memory_summaries` (per-channel values may be `null` to inherit global).
+`GET /api/memory` rows also carry `user_count` (people with notes), and channels that only have people notes are listed too.
+
+The `GET/PUT /api/settings` and `GET/PUT /api/channels/{id}` endpoints also include the memory config fields: `session_timeout_hours`, `memory_summary_enabled`, `max_memory_summaries`, `user_memory_enabled` (per-channel values may be `null` to inherit global). `DELETE /api/channels/{id}` also clears the memory overrides.
 
 #### Frontend (`src/dashboard/`)
 Single-page application with tab-based navigation:
-- **Memory tab** — Overview table of all channels with memories; channel detail card showing summaries with `conversation_start` dates and message counts; Clear and Trigger Summarize actions per channel
+- **Memory tab** — Overview table of all channels with memories (summaries and people counts); channel detail card showing summaries with `conversation_start` dates and message counts, plus a "People in this channel" list where each user's notes can be edited or deleted; Clear, Clear people notes and Trigger Summarize actions per channel
 - **Personas tab** — Template card grid, channel personas table, modal editor for create/edit
 - **Video Gen tab** — Backend status, model picker with capability hints (resolutions, aspect ratios, durations, audio, image-to-video), defaults form, and a test-generation card that submits a job, polls every 5s, and embeds the resulting `<video>` inline
 - **Backup & Restore tab** — Drag-and-drop upload zones, validation preview cards, confirmation modal for database restore
@@ -399,7 +417,8 @@ Logging uses Python's standard `logging` module:
 - **Key Resolution Priority**: Database keys (encrypted) take precedence over `.env` values
 - **Audit Logging**: All API key operations (create, update, delete, validate) are logged in `API_KEY_AUDIT`
 - **Webhook Credentials**: `webhook_id` and `webhook_token` are stored in the database but excluded from config JSON exports. They are re-applied automatically during config import to prevent loss of Discord integrations
-- **Backup Security**: Config exports exclude API keys entirely. Full database backups include all data but should be treated as sensitive
+- **Backup Security**: Config exports exclude API keys entirely, and per-user notes. Full database backups include all data but should be treated as sensitive
+- **Per-User Memory Isolation**: Notes are keyed by `(scope channel, user_id)` and only loaded for the channel a conversation happens in. Extraction only labels people who spoke in that channel's transcript and drops any other label the model returns; the `remember_about_me` / `forget_about_me` tools take their key from the message author and channel, never from model arguments. `/thread message` refuses to run outside the thread or its parent channel, since its reply carries the parent's memory. Notes are framed in the prompt as background facts, never instructions
 - **Permission Controls**: Enforced via Py-Cord decorators (`@commands.is_owner()`, `@commands.has_permissions(administrator=True)`)
 - **Input Validation**: Command inputs and external API responses are validated to prevent injection or malformed data issues
 
@@ -437,14 +456,26 @@ Logging uses Python's standard `logging` module:
    b. The LLM generates a 2–3 sentence summary of the old conversation
    c. The summary is stored in `CHANNEL_MEMORY` with the original `conversation_start` timestamp
    d. Memories are pruned to `max_memory_summaries`
-5. Channel history is cleared; the new message starts a fresh session
+5. The summarized rows are deleted (bounded by `message_pk`, so anything recorded mid-summary survives); the new message starts a fresh session
 6. On every subsequent LLM call, `get_effective_system_prompt(channel_id)` appends a `--- Channel Memory ---` block listing all stored summaries (oldest → newest), giving the model long-term context without inflating the live message window
+
+**No history is deleted unsummarized.** All paths that remove channel messages go through `memory_service` and hold the per-channel lock:
+- **Rotation** (inactivity) and **compaction** (history over `max_channel_history`) read the full stored history, not just the window
+- **Time-window prune** — the scheduled task and `/api/diagnostics/prune` call `archive_and_prune()`, which first summarizes each channel's messages older than `time_window_hours`. If a summary fails, that channel's rows are kept and retried on the next prune (or by rotation). With no LLM client configured, or summarization disabled, rows are pruned as before. Thread messages are still pruned without summaries
+- **Manual summarize** (`POST /api/memory/{channel_id}/summarize`) uses `summarize_and_clear()`, which keeps the history if summarization fails
+
+### Per-User Memory Flow
+Gideon keeps short notes about each person, unique to each channel (a thread shares its parent channel's notes):
+1. **Extraction** — whenever history is archived (rotation, compaction, the pre-prune sweep, manual summarize), `memory_service._update_user_notes()` makes one extra LLM call. The transcript labels each human speaker `[P1]`, `[P2]`… (bots and opted-out users get no label), alongside those speakers' current notes for **this scope only**. The model returns `{label: [notes]}`; unknown labels are dropped, notes are capped (`user_memory.MAX_NOTE_BULLETS`), and notes added or cleared while the call was in flight are respected. Thread messages are extracted by the pre-prune sweep into the parent's scope
+2. **Failure handling** — a failed call (error reply/exception) makes the prune sweep keep that channel's or thread's messages for retry; a malformed reply is logged and skipped
+3. **Injection** — every reply path (mentions, `/chat`, `/search`, web search tool, threads) passes `speaker_id` and the visible `history` to `get_effective_system_prompt()`, which appends the speaker's notes plus up to 4 bullets for up to 4 other recent human speakers
+4. **User controls** — `/memory me|forget|optout|optin`, the `remember_about_me` / `forget_about_me` tools, and the dashboard's People list
 
 ### Native Tool Calling (@mentions)
 When `TOOL_CALLING_ENABLED=TRUE` (or legacy `INTENT_DISCOVERY=TRUE`):
 1. User @mentions bot: "@Gideon remind me in 2 hours to check logs"
 2. `mention_commands.py` sends the message to the **primary LLM model** with tool definitions attached
-3. The model decides natively whether to call a tool (`set_reminder`, `generate_image`, `web_search`, `calculate`, `translate`, `define`, `create_poll`, `convert_timezone`, `convert_units`, `roll_dice`, `schedule_event`) or respond conversationally
+3. The model decides natively whether to call a tool (`set_reminder`, `generate_image`, `web_search`, `calculate`, `translate`, `define`, `create_poll`, `convert_timezone`, `convert_units`, `roll_dice`, `schedule_event`, `remember_about_me`, `forget_about_me`) or respond conversationally
 4. If the model requests tool calls, each tool is executed via `tool_registry.execute_tool()` and results are fed back to the model
 5. The model generates a final text response incorporating the tool results
 6. If tool calling is disabled, falls back to plain conversation (no tools)
@@ -552,6 +583,6 @@ docker-compose down
 
 ---
 
-**Last Updated**: 2026-06-28
+**Last Updated**: 2026-10-20
 **Version**: v1.4
 **Maintainer**: eoko-dev

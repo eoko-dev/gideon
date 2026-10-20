@@ -17,6 +17,7 @@ from .api_key_manager import APIKeyManager
 from .persona_manager import PersonaManager
 from .backup_manager import BackupManager
 from .memory_manager import MemoryManager
+from .user_memory_manager import UserMemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class DatabaseManager:
             self.personas = PersonaManager(self._conn)
             self.backup = BackupManager(self._conn, self.db_path)
             self.memory = MemoryManager(self._conn)
+            self.user_memory = UserMemoryManager(self._conn)
 
             # Legacy private aliases (older call sites reference these)
             self._config = self.config
@@ -217,29 +219,33 @@ class DatabaseManager:
                     channel_id: Optional[str] = None,
                     thread_id: Optional[str] = None,
                     user_id: Optional[str] = None,
-                    user_name: Optional[str] = None) -> int:
+                    user_name: Optional[str] = None,
+                    is_bot: bool = False) -> int:
         """Adds a message to the database."""
         # Ensure parent channel/thread exists if provided
         if channel_id:
             self._ensure_channel_exists(channel_id)
-        return self._messages.add_message(role, content, timestamp, channel_id, thread_id, user_id, user_name)
+        return self._messages.add_message(role, content, timestamp, channel_id, thread_id, user_id, user_name,
+                                          is_bot)
 
     def get_channel_history(self, channel_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None,
                             until: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific channel."""
         return self._messages.get_channel_history(channel_id, limit, hours_limit, until)
 
-    def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None,
+                           until: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific thread."""
-        return self._messages.get_thread_history(thread_id, limit, hours_limit)
+        return self._messages.get_thread_history(thread_id, limit, hours_limit, until)
 
-    def prune_old_messages(self, cutoff_timestamp: datetime) -> int:
-        """Deletes messages older than the specified cutoff timestamp."""
-        return self._messages.prune_old_messages(cutoff_timestamp)
+    def prune_old_messages(self, cutoff_timestamp: datetime, exclude_channel_ids=(), exclude_thread_ids=()) -> int:
+        """Deletes messages older than the cutoff, keeping those of excluded channels/threads."""
+        return self._messages.prune_old_messages(cutoff_timestamp, exclude_channel_ids, exclude_thread_ids)
 
-    def delete_channel_messages(self, channel_id: str, before_timestamp: Optional[datetime] = None) -> int:
-        """Deletes messages for a channel, optionally only those before a timestamp."""
-        return self._messages.delete_channel_messages(channel_id, before_timestamp)
+    def delete_channel_messages(self, channel_id: str, before_timestamp: Optional[datetime] = None,
+                                through_pk: Optional[int] = None) -> int:
+        """Deletes messages for a channel, optionally bounded by timestamp and/or primary key."""
+        return self._messages.delete_channel_messages(channel_id, before_timestamp, through_pk)
 
     # --- User Methods (delegate to UserManager) ---
 

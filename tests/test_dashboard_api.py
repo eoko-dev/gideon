@@ -204,7 +204,8 @@ class ChannelAndThreadTests(ApiTestCase):
         self.assertIsNone(body["persona"])
         self.assertEqual(body["sources"], {
             "model": "global", "system_prompt": "global", "session_timeout_hours": "global",
-            "memory_summary_enabled": "global", "max_memory_summaries": "global"})
+            "memory_summary_enabled": "global", "max_memory_summaries": "global",
+            "user_memory_enabled": "global"})
 
         self.db.set_channel_model("100", "openrouter/good/model")
         self.db.set_channel_system_prompt("100", "channel prompt")

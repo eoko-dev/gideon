@@ -18,6 +18,8 @@ instead of re-running expensive or channel-visible actions.
 import logging
 from typing import Any, Awaitable, Callable, Dict, List
 
+from . import user_memory
+
 logger = logging.getLogger('tool_registry')
 
 _TOOLS: Dict[str, Callable[..., Awaitable[str]]] = {}
@@ -467,3 +469,83 @@ async def _define(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     from .intent_handlers.definition import define_term
     client, model_name = _resolve_chat_client(ctx)
     return await define_term(client, model_name, args.get("term", ""), args.get("depth", "brief"))
+
+
+# ─── Per-user memory (scoped to the requesting user in this channel) ────────
+#
+# Neither schema takes a user or channel: the key always comes from the
+# message author and the channel the conversation happens in, so the model
+# can never read or write anyone else's notes, or another channel's.
+
+def _memory_owner(ctx: Dict[str, Any]):
+    """Returns (state, channel_id, author) for the requesting user, or raises ValueError."""
+    state, channel_id, author = ctx["state"], ctx["channel_id"], ctx["message"].author
+    if state.is_user_memory_opted_out(str(author.id)):
+        raise ValueError("This user has opted out of per-user memory, so nothing can be stored "
+                         "about them. They can run /memory optin to allow it.")
+    if not state.get_effective_user_memory_enabled(channel_id):
+        raise ValueError("Per-user memory is disabled in this channel.")
+    return state, channel_id, author
+
+
+@tool({
+    "name": "remember_about_me",
+    "description": ("Save a lasting fact or preference that the user explicitly asks you to remember about "
+                    "themselves (e.g. 'remember that I prefer metric units'). Only for the person speaking, "
+                    "never about someone else. Notes are kept for this channel only."),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact": {
+                "type": "string",
+                "description": "The fact to remember, as one short sentence about the user"
+            }
+        },
+        "required": ["fact"]
+    }
+}, no_repeat=True)
+async def _remember_about_me(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    fact = " ".join(str(args.get("fact", "")).split())
+    if not fact:
+        raise ValueError("No fact was given to remember.")
+    state, channel_id, author = _memory_owner(ctx)
+    row = state.get_user_notes(channel_id, str(author.id))
+    bullets = user_memory.split_notes(row["notes"] if row else "") + [fact]
+    state.set_user_notes(channel_id, str(author.id), user_memory.join_notes(bullets),
+                         display_name=author.display_name)
+    return f"Saved to {author.display_name}'s notes for this channel: {fact}"
+
+
+@tool({
+    "name": "forget_about_me",
+    "description": ("Delete notes about the user when they ask you to forget something about them, or "
+                    "everything. Only affects the person speaking, in this channel."),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "fact": {
+                "type": "string",
+                "description": "Words identifying the note(s) to forget; omit to forget everything about the user here"
+            }
+        }
+    }
+}, no_repeat=True)
+async def _forget_about_me(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    state, channel_id, author = ctx["state"], ctx["channel_id"], ctx["message"].author
+    user_id = str(author.id)
+    target = " ".join(str(args.get("fact") or "").split()).lower()
+    if not target:
+        deleted = state.delete_user_notes(channel_id, user_id)
+        return ("Deleted all of the user's notes for this channel." if deleted
+                else "There were no notes about the user in this channel.")
+
+    row = state.get_user_notes(channel_id, user_id)
+    bullets = user_memory.split_notes(row["notes"] if row else "")
+    kept = [b for b in bullets if target not in b.lower()]
+    if len(kept) == len(bullets):
+        return "No note about the user in this channel matched that."
+    if kept:
+        state.set_user_notes(channel_id, user_id, user_memory.join_notes(kept), display_name=author.display_name)
+    else:
+        state.delete_user_notes(channel_id, user_id)
+    return f"Forgot {len(bullets) - len(kept)} note(s) about the user in this channel."

@@ -367,6 +367,14 @@
                                         <option value="false">Disabled - just clear history silently</option>
                                     </select>
                                 </div>
+                                <div class="field">
+                                    <label for="setting-user-memory">Per-user memory</label>
+                                    <select id="setting-user-memory">
+                                        <option value="true">Enabled - keep notes about each person, separately per channel</option>
+                                        <option value="false">Disabled - no per-user notes</option>
+                                    </select>
+                                    <small class="field-hint">Notes are only ever used in the channel they came from. Users can opt out with /memory optout.</small>
+                                </div>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save memory settings</button>
                                     <span id="memory-settings-save-status" class="save-status" role="status" aria-live="polite"></span>
@@ -802,7 +810,7 @@
                 <!-- Memory -->
                 <section id="tab-memory" class="tab-content" aria-labelledby="page-title">
                     <div class="page-toolbar">
-                        <p class="page-desc">Long-term AI-generated summaries of past conversations, stored per channel.</p>
+                        <p class="page-desc">Long-term AI-generated summaries of past conversations, and notes about each person, stored per channel.</p>
                     </div>
 
                     <div class="card">
@@ -825,6 +833,16 @@
                         </div>
                         <div class="card-body">
                             <div id="memory-entries-list"></div>
+                        </div>
+                        <div class="card-header">
+                            <h2 class="card-title" id="memory-people-title">People in this channel</h2>
+                            <div class="card-actions">
+                                <button type="button" class="btn btn-danger btn-sm" id="memory-clear-people-btn">Clear all people notes</button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <p class="field-hint" id="memory-people-hint"></p>
+                            <div id="memory-people-list"></div>
                         </div>
                     </div>
                 </section>
@@ -1091,6 +1109,20 @@
                                 </div>
                                 <input type="number" id="channel-edit-max-summaries" min="1" max="50">
                                 <small class="field-hint" id="channel-max-summaries-hint"></small>
+                            </div>
+                        </div>
+                        <div class="form-row form-row-3">
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-user-memory">Per-user memory</label>
+                                    <span class="chip chip-source" data-source-for="user_memory_enabled" hidden></span>
+                                </div>
+                                <select id="channel-edit-user-memory">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                                <small class="field-hint" id="channel-user-memory-hint"></small>
                             </div>
                         </div>
                     </fieldset>

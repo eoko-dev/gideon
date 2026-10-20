@@ -109,8 +109,9 @@ class MentionCommands(commands.Cog):
             await message.channel.send(f"{prefix}Additionally, the conversation system is unavailable.")
             return
 
-        channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=content)
         conversation_context = self._history_for(message, channel_id)
+        channel_system_prompt = self.state.get_effective_system_prompt(
+            channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -580,12 +581,13 @@ class MentionCommands(commands.Cog):
             return ("Error: the OpenRouter client is not available, so the search "
                     "did not run.")
 
-        # Enhance system prompt for search
-        channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=query)
-        search_system_prompt = build_search_system_prompt(channel_system_prompt)
-
         # Get conversation context
         conversation_context = self._history_for(message, channel_id)
+
+        # Enhance system prompt for search
+        channel_system_prompt = self.state.get_effective_system_prompt(
+            channel_id, query=query, speaker_id=str(message.author.id), history=conversation_context)
+        search_system_prompt = build_search_system_prompt(channel_system_prompt)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -805,6 +807,7 @@ class MentionCommands(commands.Cog):
                     "role": "user",
                     "name": message.author.display_name,
                     "user_id": str(message.author.id),
+                    "is_bot": message.author.bot,
                     "content": resolve_discord_mentions(message),
                     "timestamp": datetime.now()
                 })
@@ -869,15 +872,17 @@ class MentionCommands(commands.Cog):
                             except Exception as e:
                                 await message.channel.send(f"⚠️ Failed to process image {attachment.filename}: {str(e)}")
 
-            # Get effective system prompt (persona > channel config > global),
-            # with memory summaries relevant to the current message appended
-            channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=content)
-
             # Channel context up to and including this mention. Anchoring
             # matters: without it, messages from other users that arrive while
             # this reply is in flight end up after the mention, and the model
             # answers them instead of the person who summoned it.
             conversation_context = self._history_for(message, channel_id)
+
+            # Get effective system prompt (persona > channel config > global),
+            # with memory summaries relevant to the current message and this
+            # channel's notes on the speaker and other participants appended
+            channel_system_prompt = self.state.get_effective_system_prompt(
+                channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
 
             # Mentions are recorded above, so history already ends with this
             # turn, labelled with the speaker's name by the client. Only

@@ -15,7 +15,8 @@ class MessageManager:
                     channel_id: Optional[str] = None,
                     thread_id: Optional[str] = None,
                     user_id: Optional[str] = None,
-                    user_name: Optional[str] = None) -> int:
+                    user_name: Optional[str] = None,
+                    is_bot: bool = False) -> int:
         """
         Adds a message to the database, associated with either a channel or a thread.
 
@@ -27,6 +28,7 @@ class MessageManager:
             thread_id (Optional[str]): The ID of the thread if it's a thread message.
             user_id (Optional[str]): The ID of the user who sent the message.
             user_name (Optional[str]): The display name of the user who sent the message.
+            is_bot (bool): True if a bot or webhook (not a human) sent the message.
 
         Returns:
             int: The primary key (message_pk) of the inserted message.
@@ -41,13 +43,14 @@ class MessageManager:
             channel_id = None  # Prioritize thread_id if both given
 
         sql = """
-        INSERT INTO MESSAGES (channel_id, thread_id, user_id, user_name, role, content, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO MESSAGES (channel_id, thread_id, user_id, user_name, role, content, timestamp, is_bot)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (channel_id, thread_id, user_id, user_name, role, content, timestamp))
+                cursor.execute(sql, (channel_id, thread_id, user_id, user_name, role, content, timestamp,
+                                     1 if is_bot else 0))
                 last_id = cursor.lastrowid
             logger.debug(f"Added message (PK: {last_id}) for {'channel ' + channel_id if channel_id else 'thread ' + thread_id}")
             return last_id
@@ -62,7 +65,8 @@ class MessageManager:
         ``until`` caps the history at a given timestamp (inclusive) so a reply
         never sees messages that arrived after the one it is answering.
         """
-        base_sql = f"SELECT role, content, timestamp, user_id, user_name AS name FROM MESSAGES WHERE {id_column} = ?"
+        base_sql = (f"SELECT message_pk, role, content, timestamp, user_id, user_name AS name, is_bot "
+                    f"FROM MESSAGES WHERE {id_column} = ?")
         params: List[Any] = [entity_id]
 
         if hours_limit is not None:
@@ -106,9 +110,10 @@ class MessageManager:
         """Gets message history for a specific channel."""
         return self._get_history(channel_id, "channel_id", limit, hours_limit, until)
 
-    def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_thread_history(self, thread_id: str, limit: Optional[int] = None, hours_limit: Optional[int] = None,
+                           until: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Gets message history for a specific thread."""
-        return self._get_history(thread_id, "thread_id", limit, hours_limit)
+        return self._get_history(thread_id, "thread_id", limit, hours_limit, until)
 
     def get_channel_message_count(self, channel_id: str) -> int:
         """Counts stored messages for a channel."""
@@ -130,40 +135,90 @@ class MessageManager:
             logger.error(f"Error getting distinct channel ids: {e}", exc_info=True)
             return []
 
-    def delete_channel_messages(self, channel_id: str, before_timestamp: Optional[datetime] = None) -> int:
-        """Deletes messages for a channel, optionally only those before a timestamp."""
+    def get_channel_ids_with_messages_before(self, cutoff_timestamp: datetime) -> List[str]:
+        """Returns the IDs of channels that have messages older than the cutoff."""
+        return self._ids_with_messages_before("channel_id", cutoff_timestamp)
+
+    def get_thread_ids_with_messages_before(self, cutoff_timestamp: datetime) -> List[str]:
+        """Returns the IDs of threads that have messages older than the cutoff."""
+        return self._ids_with_messages_before("thread_id", cutoff_timestamp)
+
+    def _ids_with_messages_before(self, id_column: str, cutoff_timestamp: datetime) -> List[str]:
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute(f"SELECT DISTINCT {id_column} FROM MESSAGES "
+                           f"WHERE {id_column} IS NOT NULL AND timestamp < ?;", (cutoff_timestamp,))
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting {id_column}s with messages before {cutoff_timestamp}: {e}", exc_info=True)
+            return []
+
+    def delete_thread_messages(self, thread_id: str, before_timestamp: Optional[datetime] = None,
+                               through_pk: Optional[int] = None) -> int:
+        """Deletes a thread's messages before a timestamp and up to a primary key."""
+        sql = "DELETE FROM MESSAGES WHERE thread_id = ?"
+        params: List[Any] = [thread_id]
+        if before_timestamp is not None:
+            sql += " AND timestamp < ?"
+            params.append(before_timestamp)
+        if through_pk is not None:
+            sql += " AND message_pk <= ?"
+            params.append(through_pk)
+        try:
+            with self._conn:
+                return self._conn.execute(sql + ";", tuple(params)).rowcount
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting messages for thread '{thread_id}': {e}", exc_info=True)
+            return 0
+
+    def delete_channel_messages(self, channel_id: str, before_timestamp: Optional[datetime] = None,
+                                through_pk: Optional[int] = None) -> int:
+        """Deletes messages for a channel, optionally only those before a timestamp
+        and/or up to and including a message primary key."""
         sql = "DELETE FROM MESSAGES WHERE channel_id = ?"
         params: List[Any] = [channel_id]
         if before_timestamp is not None:
             sql += " AND timestamp < ?"
             params.append(before_timestamp)
+        if through_pk is not None:
+            sql += " AND message_pk <= ?"
+            params.append(through_pk)
         try:
             with self._conn:
                 cursor = self._conn.cursor()
                 cursor.execute(sql + ";", tuple(params))
                 deleted = cursor.rowcount
             logger.info(f"Deleted {deleted} messages for channel {channel_id}"
-                        + (f" before {before_timestamp}" if before_timestamp else ""))
+                        + (f" before {before_timestamp}" if before_timestamp else "")
+                        + (f" through message {through_pk}" if through_pk is not None else ""))
             return deleted
         except sqlite3.Error as e:
             logger.error(f"Error deleting messages for channel '{channel_id}': {e}", exc_info=True)
             return 0
 
-    def prune_old_messages(self, cutoff_timestamp: datetime) -> int:
+    def prune_old_messages(self, cutoff_timestamp: datetime, exclude_channel_ids=(), exclude_thread_ids=()) -> int:
         """
         Deletes messages older than the specified cutoff timestamp.
 
         Args:
             cutoff_timestamp (datetime): Messages older than this will be deleted.
+            exclude_channel_ids: Channels whose messages are kept regardless of age.
+            exclude_thread_ids: Threads whose messages are kept regardless of age.
 
         Returns:
             int: The number of messages deleted.
         """
-        sql = "DELETE FROM MESSAGES WHERE timestamp < ?;"
+        sql = "DELETE FROM MESSAGES WHERE timestamp < ?"
+        params: List[Any] = [cutoff_timestamp]
+        for column, ids in (("channel_id", exclude_channel_ids), ("thread_id", exclude_thread_ids)):
+            excluded = [str(i) for i in ids]
+            if excluded:
+                sql += f" AND ({column} IS NULL OR {column} NOT IN ({', '.join('?' * len(excluded))}))"
+                params.extend(excluded)
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (cutoff_timestamp,))
+                cursor.execute(sql + ";", tuple(params))
                 deleted_count = cursor.rowcount
             if deleted_count > 0:
                 logger.info(f"Pruned {deleted_count} old messages before {cutoff_timestamp}.")

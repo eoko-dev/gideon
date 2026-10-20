@@ -168,8 +168,14 @@ class FakeMemoryState:
     def get_channel_history(self, channel_id, limit=None, until=None):
         return list(self.rows)
 
+    def get_full_channel_history(self, channel_id, until=None):
+        return list(self.rows)
+
     def get_effective_memory_summary_enabled(self, channel_id):
         return True
+
+    def get_effective_user_memory_enabled(self, channel_id):
+        return False
 
     def get_effective_model(self, channel_id):
         return "openrouter/test-model"
@@ -326,7 +332,7 @@ class FakeState:
     def get_tool_calling_enabled(self):
         return False
 
-    def get_effective_system_prompt(self, channel_id, query=None):
+    def get_effective_system_prompt(self, channel_id, query=None, speaker_id=None, history=None):
         return "sys"
 
 
