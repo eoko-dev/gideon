@@ -737,7 +737,12 @@ class MentionCommands(commands.Cog):
     # ─── Message listener ───────────────────────────────────────────────────
 
     def _is_bot_mentioned(self, message: discord.Message) -> bool:
-        """Checks user mentions, raw content, and same-named role mentions."""
+        """Checks @everyone/@here, user mentions, raw content, and same-named role mentions."""
+        # Gideon is part of everyone. Discord only sets this when the author
+        # was allowed to ping everyone, so typed-but-inert "@everyone" is ignored.
+        if message.mention_everyone:
+            return True
+
         for mention in message.mentions:
             if mention.id == self.bot.user.id:
                 return True
@@ -820,7 +825,7 @@ class MentionCommands(commands.Cog):
             # Runs in the background so the summarization call never delays a reply.
             schedule_compaction(channel_id, self.state, self.clients)
 
-        if not is_mentioned or message.mention_everyone:
+        if not is_mentioned:
             return
 
         if recorded:

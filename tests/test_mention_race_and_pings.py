@@ -380,12 +380,46 @@ class MentionRaceRegressionTests(unittest.IsolatedAsyncioTestCase):
         cog._active_channels = set()
         return cog
 
-    def make_message(self, msg_id, author, content, mentions=()):
+    def make_message(self, msg_id, author, content, mentions=(), mention_everyone=False):
         channel = types.SimpleNamespace(id=555, typing=lambda: _Typing(), send=mock.AsyncMock())
         return types.SimpleNamespace(
             id=msg_id, author=author, content=content, mentions=list(mentions), role_mentions=[],
-            channel_mentions=[], attachments=[], webhook_id=None, mention_everyone=False, channel=channel,
+            channel_mentions=[], attachments=[], webhook_id=None, mention_everyone=mention_everyone,
+            channel=channel,
         )
+
+    async def run_message(self, message):
+        client = BlockingChatClient("Hello everyone")
+        client.release.set()
+        cog = self.make_cog(client)
+        with mock.patch("src.cogs.mention_commands.check_and_rotate_session", mock.AsyncMock(return_value=False)), \
+             mock.patch("src.cogs.mention_commands.schedule_compaction"):
+            await asyncio.wait_for(cog.on_message(message), 2)
+        return client
+
+    async def test_everyone_with_direct_mention_gets_a_reply(self):
+        adam = types.SimpleNamespace(id=ALICE_ID, display_name="Adam", name="adam", bot=False)
+        bot_user = types.SimpleNamespace(id=BOT_ID, display_name="Gideon", name="Gideon", bot=True)
+        msg = self.make_message(1, adam, f"@everyone I have updated <@{BOT_ID}>",
+                                mentions=[bot_user], mention_everyone=True)
+        client = await self.run_message(msg)
+        self.assertTrue(client.received)
+        self.assertEqual(self.sent, ["Hello everyone"])
+
+    async def test_everyone_alone_counts_as_mentioning_gideon(self):
+        adam = types.SimpleNamespace(id=ALICE_ID, display_name="Adam", name="adam", bot=False)
+        msg = self.make_message(1, adam, "@everyone meeting in 5", mention_everyone=True)
+        client = await self.run_message(msg)
+        self.assertTrue(client.received)
+        self.assertEqual(self.sent, ["Hello everyone"])
+
+    async def test_inert_everyone_text_is_not_a_mention(self):
+        # Discord leaves mention_everyone False when the author can't ping everyone
+        adam = types.SimpleNamespace(id=ALICE_ID, display_name="Adam", name="adam", bot=False)
+        msg = self.make_message(1, adam, "@everyone look at this")
+        client = await self.run_message(msg)
+        self.assertFalse(client.received)
+        self.assertEqual(self.sent, [])
 
     async def test_reply_ignores_messages_that_arrive_during_generation(self):
         client = BlockingChatClient("On it @Bob")

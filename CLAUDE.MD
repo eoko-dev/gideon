@@ -163,6 +163,7 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - Checks for active persona per channel and routes responses through `WebhookSender`
 
 3. **`mention_commands.py`** - Handles @mentions of the bot
+   - `@everyone` / `@here` count as mentioning Gideon (only when Discord actually pinged everyone, i.e. the author had permission)
    - Uses native LLM tool calling (when `TOOL_CALLING_ENABLED=TRUE`)
    - The primary model receives tool definitions and decides natively whether to call a tool (reminder, image generation, calculation, translation, etc.) or respond conversationally
    - Eliminates the need for a separate intent classification LLM call
