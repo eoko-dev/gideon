@@ -17,7 +17,10 @@ COMMAND_CATEGORIES: Dict[str, Dict] = {
             {"name": "/search", "description": "Search the web for current information using AI"},
             {"name": "/reset", "description": "Clear the conversation history for the current channel"},
             {"name": "/summarize", "description": "Summarize the current conversation history"},
-            {"name": "/memory", "description": "Show conversation statistics (message count, history window)"},
+            {"name": "/memory status", "description": "Show this channel's memory status"},
+            {"name": "/memory me", "description": "See what Gideon remembers about you in this channel"},
+            {"name": "/memory forget", "description": "Delete Gideon's notes about you (this channel or everywhere)"},
+            {"name": "/memory optout / optin", "description": "Stop or resume per-user memory for you, everywhere"},
         ],
         "admin_only": False
     },

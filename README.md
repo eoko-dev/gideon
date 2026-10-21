@@ -29,6 +29,7 @@ Gideon transforms your Discord server into an AI-powered hub, connecting members
 
 * **Multiple AI Models** - Access OpenAI, Anthropic Claude, Google Gemini, and more through OpenRouter
 * **Persistent Channel Memory** - Long-term, channel-specific memory that grows over time. When a channel goes quiet for a configurable period (default 24 hours), Gideon automatically summarizes the conversation and stores it as a memory entry. Future conversations in that channel are informed by all past summaries — injected into the AI's context on every message — so the bot never loses track of recurring topics, decisions, or channel history. Memories are channel-isolated: `#general` never bleeds into `#dev`. Configurable via the dashboard or per-channel overrides.
+* **Per-User Memory, Per Channel** - Gideon also keeps short notes about each person (preferences, projects, how they like answers), separately in every channel: what it learns about you in `#dev` is never used in `#general`. Threads share their parent channel's notes. Say "@Gideon remember that I prefer metric" to add one; see yours with `/memory me`, delete them with `/memory forget`, or opt out everywhere with `/memory optout`.
 * **Native Tool Calling** - Simply @mention Gideon with natural language to automatically execute commands without needing to remember slash command syntax. The primary LLM model natively decides whether to call a tool or respond conversationally — no separate intent classification step needed:
   + **Reminders**: "@Gideon remind me to check the server logs tomorrow at 3pm"
   + **Image Generation**: "@Gideon draw a sunset over mountains with vibrant colors"
@@ -363,7 +364,11 @@ Generation typically takes 30 seconds to several minutes; the bot polls until th
 | `/search` | Search the web for current information using the AI |
 | `/reset` | Clear the conversation history for the current channel |
 | `/summarize` | Summarize the current conversation history |
-| `/memory` | Show conversation statistics: message count, stored memory summaries, session age, session timeout, and auto-summarize status |
+| `/memory status` | Show conversation statistics: message count, stored memory summaries, session age, session timeout, auto-summarize and per-user memory status |
+| `/memory me` | See what Gideon remembers about you in this channel (only you can see it) |
+| `/memory forget` | Delete Gideon's notes about you in this channel, or everywhere |
+| `/memory optout` / `/memory optin` | Stop (and delete) or resume per-user memory for you in every channel |
+| `/memory forget_user` | Admin: delete Gideon's notes about a member in this channel |
 | `/summarizeurl` | Fetch and summarize the content of a given URL |
 
 ### Persona Commands (Admin)
@@ -538,7 +543,8 @@ gideon/
 │       ├── cloudflare_client.py
 │       ├── encryption.py           # Fernet encryption utility
 │       ├── game_session.py         # In-memory trivia game state
-│       ├── memory_service.py       # Session rotation & channel memory summarization
+│       ├── memory_service.py       # Session rotation, channel memory summarization & per-user notes
+│       ├── user_memory.py          # Per-user note formatting & prompt block
 │       ├── model_manager.py
 │       ├── openai_client.py
 │       ├── openrouter_client.py
@@ -560,6 +566,7 @@ gideon/
 │           ├── api_key_manager.py
 │           ├── backup_manager.py   # Config/database backup & restore
 │           ├── memory_manager.py   # Channel memory CRUD (CHANNEL_MEMORY table)
+│           ├── user_memory_manager.py # Per-user, per-channel notes (CHANNEL_USER_MEMORY table)
 │           ├── persona_manager.py  # Persona template & channel persona CRUD
 │           ├── trivia_manager.py
 │           └── ...

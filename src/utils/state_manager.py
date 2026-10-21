@@ -4,8 +4,11 @@ from typing import Dict, List, Any, Optional
 import logging
 import asyncio # Keep for potential async operations like model validation
 
+import discord
+
 # Import the new DatabaseManager
 from .database import DatabaseManager
+from . import user_memory
 # Keep config import for default values if DB is empty
 from ..config import (
     DEFAULT_MODEL as CONFIG_DEFAULT_MODEL,
@@ -41,6 +44,7 @@ CONFIG_KEY_INTENT_ENABLED = "intent_enabled"  # Legacy DB key, now stores the to
 CONFIG_KEY_SESSION_TIMEOUT = "session_timeout_hours"
 CONFIG_KEY_MEMORY_SUMMARY_ENABLED = "memory_summary_enabled"
 CONFIG_KEY_MAX_MEMORY_SUMMARIES = "max_memory_summaries"
+CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
 
 class BotStateManager:
@@ -85,6 +89,7 @@ class BotStateManager:
         self.session_timeout_hours = await self._load_or_set_config(CONFIG_KEY_SESSION_TIMEOUT, 24, 'int')
         self.memory_summary_enabled = await self._load_or_set_config(CONFIG_KEY_MEMORY_SUMMARY_ENABLED, True, 'bool')
         self.max_memory_summaries = await self._load_or_set_config(CONFIG_KEY_MAX_MEMORY_SUMMARIES, 10, 'int')
+        self.user_memory_enabled = await self._load_or_set_config(CONFIG_KEY_USER_MEMORY_ENABLED, True, 'bool')
 
         self._initialized = True
         logger.info("BotStateManager initialized successfully.")
@@ -206,6 +211,13 @@ class BotStateManager:
         self.max_memory_summaries = value
         await self._save_config(CONFIG_KEY_MAX_MEMORY_SUMMARIES, value, 'int')
 
+    def get_user_memory_enabled(self) -> bool:
+        return self.user_memory_enabled
+
+    async def set_user_memory_enabled(self, value: bool):
+        self.user_memory_enabled = value
+        await self._save_config(CONFIG_KEY_USER_MEMORY_ENABLED, value, 'bool')
+
     def get_effective_session_timeout(self, channel_id: str) -> int:
         """Returns channel override if set, otherwise the global value."""
         val = self._get_channel_memory_config(channel_id, 'session_timeout_hours')
@@ -223,6 +235,16 @@ class BotStateManager:
         val = self._get_channel_memory_config(channel_id, 'max_memory_summaries')
         return int(val) if val is not None else self.max_memory_summaries
 
+    def get_effective_user_memory_enabled(self, channel_id: str) -> bool:
+        """Whether per-user notes are kept in this channel's memory scope.
+
+        A thread follows its parent channel's setting.
+        """
+        val = self._get_channel_memory_config(self.get_memory_scope(channel_id), 'user_memory_enabled')
+        if val is not None:
+            return bool(int(val))
+        return self.user_memory_enabled
+
     def _get_channel_memory_config(self, channel_id: str, column: str):
         """Reads a single memory config column from CHANNEL_CONFIG, returns None if not set."""
         import sqlite3
@@ -238,7 +260,9 @@ class BotStateManager:
             logger.error(f"Error reading {column} for channel {channel_id}: {e}", exc_info=True)
             return None
 
-    _CHANNEL_MEMORY_FIELDS = ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries')
+    _CHANNEL_MEMORY_FIELDS = ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
+                              'user_memory_enabled')
+    _CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled')
 
     def set_channel_memory_config(self, channel_id: str, **overrides):
         """Updates the given per-channel memory overrides; a value of None clears it (falls back to global)."""
@@ -253,7 +277,7 @@ class BotStateManager:
             if field not in overrides:
                 continue
             value = overrides[field]
-            if field == 'memory_summary_enabled' and value is not None:
+            if field in self._CHANNEL_MEMORY_BOOL_FIELDS and value is not None:
                 value = 1 if value else 0
             updates.append(f"{field} = ?")
             params.append(value)
@@ -275,7 +299,8 @@ class BotStateManager:
         sql = """UPDATE CHANNEL_CONFIG
                  SET session_timeout_hours = NULL,
                      memory_summary_enabled = NULL,
-                     max_memory_summaries = NULL
+                     max_memory_summaries = NULL,
+                     user_memory_enabled = NULL
                  WHERE channel_id = ?;"""
         try:
             with self.db_manager._conn:
@@ -302,6 +327,78 @@ class BotStateManager:
 
     def get_all_memory_stats(self):
         return self.db_manager.get_all_memory_stats()
+
+    # --- Per-User Memory (scoped to one channel) ---
+    #
+    # Notes are always keyed by (memory scope, user_id). Callers pass the
+    # channel the conversation happens in and these resolve its scope, so
+    # nothing outside this section decides which channel a note belongs to.
+
+    def set_channel_resolver(self, resolver):
+        """Registers a callable mapping an int channel ID to a Discord channel (e.g. bot.get_channel)."""
+        self._channel_resolver = resolver
+
+    def get_memory_scope(self, channel_id: str) -> str:
+        """Returns the channel ID whose per-user memory a conversation belongs to.
+
+        Threads share their parent channel's memory; every other channel is
+        its own scope.
+        """
+        channel_id = str(channel_id)
+        thread = self.db_manager.get_thread_info(channel_id)
+        if thread and thread.get('channel_id'):
+            return str(thread['channel_id'])
+        resolver = getattr(self, '_channel_resolver', None)
+        if resolver is not None:
+            try:
+                channel = resolver(int(channel_id))
+            except (TypeError, ValueError):
+                channel = None
+            if isinstance(channel, discord.Thread) and channel.parent_id:
+                return str(channel.parent_id)
+        return channel_id
+
+    def get_user_notes(self, channel_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        return self.db_manager.user_memory.get_notes(self.get_memory_scope(channel_id), str(user_id))
+
+    def get_user_notes_for(self, channel_id: str, user_ids) -> Dict[str, Dict[str, Any]]:
+        return self.db_manager.user_memory.get_notes_for_users(self.get_memory_scope(channel_id), user_ids)
+
+    def set_user_notes(self, channel_id: str, user_id: str, notes: str,
+                       display_name: Optional[str] = None, added_messages: int = 0):
+        scope = self.get_memory_scope(channel_id)
+        self.db_manager._ensure_channel_exists(scope)
+        self.db_manager.user_memory.set_notes(scope, str(user_id), notes, display_name, added_messages)
+
+    def delete_user_notes(self, channel_id: str, user_id: str) -> int:
+        return self.db_manager.user_memory.delete_notes(self.get_memory_scope(channel_id), str(user_id))
+
+    def delete_user_notes_everywhere(self, user_id: str) -> int:
+        return self.db_manager.user_memory.delete_user_everywhere(str(user_id))
+
+    def list_channel_user_notes(self, channel_id: str) -> List[Dict[str, Any]]:
+        return self.db_manager.user_memory.list_channel_notes(self.get_memory_scope(channel_id))
+
+    def delete_channel_user_notes(self, channel_id: str) -> int:
+        return self.db_manager.user_memory.delete_channel_notes(self.get_memory_scope(channel_id))
+
+    def get_user_memory_stats(self) -> Dict[str, int]:
+        return self.db_manager.user_memory.get_stats()
+
+    def is_user_memory_opted_out(self, user_id: str) -> bool:
+        """True if the user asked Gideon not to keep notes about them in any channel."""
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        return bool(prefs.get('memory_opt_out'))
+
+    def set_user_memory_opt_out(self, user_id: str, opted_out: bool) -> int:
+        """Sets the opt-out flag; opting out also deletes the user's notes everywhere.
+
+        Returns the number of notes deleted.
+        """
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        prefs['memory_opt_out'] = bool(opted_out)
+        self.db_manager.set_user_preferences(str(user_id), prefs)
+        return self.delete_user_notes_everywhere(user_id) if opted_out else 0
 
     async def reload_all_from_env(self, system_prompt: str) -> dict:
         """Reloads all settings from environment variables. Returns dict of reloaded values."""
@@ -378,6 +475,7 @@ class BotStateManager:
         content = message.get("content")
         user_id = message.get("user_id") # Assuming user_id might be in the message dict
         user_name = message.get("name") # Speaker's display name, used to label turns for the LLM
+        is_bot = bool(message.get("is_bot")) # Bots and webhooks are never given per-user notes
         timestamp = datetime.now() # Use current time for DB timestamp
 
         if not role or not content:
@@ -392,7 +490,8 @@ class BotStateManager:
             timestamp=timestamp,
             channel_id=str(channel_id),
             user_id=user_id,
-            user_name=user_name
+            user_name=user_name,
+            is_bot=is_bot
         )
         return timestamp
 
@@ -408,6 +507,42 @@ class BotStateManager:
     def delete_channel_messages_before(self, channel_id: str, before_timestamp) -> int:
         """Deletes a channel's messages older than the given timestamp."""
         return self.db_manager.delete_channel_messages(str(channel_id), before_timestamp)
+
+    def get_full_channel_history(self, channel_id: str,
+                                 until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Gets every stored message for a channel, ignoring the history window.
+
+        Memory archiving needs this: summarizing only the window while
+        deleting everything would drop the overflow unsummarized.
+        """
+        return self.db_manager.get_channel_history(str(channel_id), limit=None, until=until)
+
+    def delete_channel_messages_through(self, channel_id: str, message_pk: int,
+                                        before_timestamp: Optional[datetime] = None) -> int:
+        """Deletes a channel's messages up to and including ``message_pk``.
+
+        Bounding by primary key deletes exactly the rows that were read and
+        summarized, never ones recorded while the summary call was in flight.
+        """
+        return self.db_manager.delete_channel_messages(str(channel_id), before_timestamp, message_pk)
+
+    def get_channel_ids_with_messages_before(self, cutoff_timestamp: datetime) -> List[str]:
+        """Returns the IDs of channels holding messages older than the cutoff."""
+        return self.db_manager.messages.get_channel_ids_with_messages_before(cutoff_timestamp)
+
+    def get_thread_ids_with_messages_before(self, cutoff_timestamp: datetime) -> List[str]:
+        """Returns the IDs of threads holding messages older than the cutoff."""
+        return self.db_manager.messages.get_thread_ids_with_messages_before(cutoff_timestamp)
+
+    def get_full_thread_history(self, thread_id: str,
+                                until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Gets every stored message for a thread, ignoring the history window."""
+        return self.db_manager.get_thread_history(str(thread_id), limit=None, until=until)
+
+    def delete_thread_messages_through(self, thread_id: str, message_pk: int,
+                                       before_timestamp: Optional[datetime] = None) -> int:
+        """Deletes a thread's messages up to and including ``message_pk``."""
+        return self.db_manager.messages.delete_thread_messages(str(thread_id), before_timestamp, message_pk)
 
     # --- Discord Thread Methods ---
 
@@ -440,7 +575,8 @@ class BotStateManager:
             timestamp=timestamp,
             thread_id=str(thread_id),
             user_id=user_id,
-            user_name=user_name
+            user_name=user_name,
+            is_bot=bool(message.get("is_bot"))
         )
 
     def get_discord_thread_history(self, thread_id: str, limit: Optional[int] = None,
@@ -489,16 +625,26 @@ class BotStateManager:
 
     # --- Pruning Method ---
 
-    def prune_old_data(self) -> Dict[str, int]:
-        """Prunes old messages, threads, sent reminders, and trivia sessions from the database."""
+    def prune_old_data(self, retain_channel_ids=(), message_cutoff: Optional[datetime] = None,
+                       retain_thread_ids=()) -> Dict[str, int]:
+        """Prunes old messages, threads, sent reminders, and trivia sessions from the database.
+
+        Channels in ``retain_channel_ids`` (and threads in ``retain_thread_ids``)
+        keep their messages: their pre-prune memory archive failed and is
+        retried on the next run.
+        Prefer ``memory_service.archive_and_prune``, which summarizes channel
+        history before it is deleted.
+        """
         logger.info("Starting data pruning...")
-        message_cutoff = datetime.now() - timedelta(hours=self.time_window_hours)
+        if message_cutoff is None:
+            message_cutoff = datetime.now() - timedelta(hours=self.time_window_hours)
         thread_cutoff = datetime.now() - timedelta(days=14)
         reminder_cutoff = datetime.now() - timedelta(days=30)
         trivia_session_days = 30  # Keep trivia sessions for 30 days
 
         try:
-            messages_pruned = self.db_manager.prune_old_messages(message_cutoff)
+            messages_pruned = self.db_manager.prune_old_messages(message_cutoff, retain_channel_ids,
+                                                                 retain_thread_ids)
             threads_pruned = self.db_manager.prune_old_threads(thread_cutoff)
             reminders_pruned = self.db_manager.prune_old_reminders(reminder_cutoff)
             trivia_sessions_pruned = self.db_manager.prune_old_trivia_sessions(trivia_session_days)
@@ -786,7 +932,10 @@ class BotStateManager:
 
         return persona
 
-    def get_effective_system_prompt(self, channel_id: str, query: Optional[str] = None) -> str:
+    def get_effective_system_prompt(self, channel_id: str, query: Optional[str] = None,
+                                    speaker_id: Optional[str] = None,
+                                    history: Optional[List[Dict[str, Any]]] = None,
+                                    base_prompt: Optional[str] = None) -> str:
         """Gets the effective system prompt: Persona > Channel Config > Global.
 
         The multi-user framing is always appended so the model knows how user
@@ -794,13 +943,19 @@ class BotStateManager:
         current user message) is given, memory summaries matching it are
         retrieved via full-text search and included alongside the most recent
         summaries.
+
+        When `speaker_id` is given, that user's notes for this channel are
+        added, plus short notes for other people speaking in `history` (the
+        context the model will see). `base_prompt` replaces the persona /
+        channel / global prompt, e.g. for a thread's own system prompt.
         """
-        persona = self.get_effective_persona(channel_id)
-        if persona and persona.get('system_prompt'):
-            base_prompt = persona['system_prompt']
-        else:
-            channel_prompt = self.get_channel_system_prompt(channel_id)
-            base_prompt = channel_prompt if channel_prompt else self.get_global_system_prompt()
+        if not base_prompt:
+            persona = self.get_effective_persona(channel_id)
+            if persona and persona.get('system_prompt'):
+                base_prompt = persona['system_prompt']
+            else:
+                channel_prompt = self.get_channel_system_prompt(channel_id)
+                base_prompt = channel_prompt if channel_prompt else self.get_global_system_prompt()
 
         # No global prompt is configured by default; fall back explicitly so the
         # identity prompt is never replaced by the memory block alone
@@ -813,7 +968,29 @@ class BotStateManager:
         if memory_block:
             sections.append(memory_block)
 
+        if speaker_id:
+            people_block = self._build_user_memory_context(channel_id, str(speaker_id), history)
+            if people_block:
+                sections.append(people_block)
+
         return "\n\n".join(sections)
+
+    def _build_user_memory_context(self, channel_id: str, speaker_id: str,
+                                   history: Optional[List[Dict[str, Any]]]) -> str:
+        """Builds the notes block for the speaker and other participants in `history`."""
+        try:
+            if not self.get_effective_user_memory_enabled(channel_id):
+                return ""
+            others = user_memory.recent_participants(history, exclude_id=speaker_id)
+            notes = self.get_user_notes_for(channel_id, [speaker_id] + [uid for uid, _ in others])
+            if not notes:
+                return ""
+            speaker_name = (user_memory.latest_name(history, speaker_id)
+                            or (notes.get(speaker_id) or {}).get('display_name') or "Them")
+            return user_memory.build_people_block((speaker_id, speaker_name), others, notes)
+        except Exception as e:
+            logger.error(f"Error building user memory context for channel {channel_id}: {e}", exc_info=True)
+            return ""
 
     def search_channel_memories(self, channel_id: str, query: str, limit: int = 3):
         """Full-text search over a channel's memory summaries."""

@@ -155,14 +155,11 @@ class ThreadCommands(commands.Cog):
                 # Use the getter method
                 conversation_context = self.state.get_discord_thread_history(thread_id)
 
-                # Get thread-specific system prompt (or channel default)
-                thread_system_prompt = thread_config.get("system_prompt") if thread_config else None
-
-                if not thread_system_prompt:
-                    thread_system_prompt = self.state.get_effective_system_prompt(channel_id)
-                    if not thread_system_prompt:
-                         # Fallback to global system prompt if no channel or thread specific prompt
-                         thread_system_prompt = self.openrouter_client.system_prompt # Use the default from client init
+                # Thread-specific system prompt (or channel default), with the
+                # parent channel's memory and notes on the people in the thread
+                thread_system_prompt = self.state.get_effective_system_prompt(
+                    channel_id, speaker_id=str(ctx.author.id), history=conversation_context,
+                    base_prompt=thread_config.get("system_prompt") if thread_config else None)
 
                 # Temporarily set the model for this request
                 current_model = self.openrouter_client.model
@@ -232,6 +229,13 @@ class ThreadCommands(commands.Cog):
         thread_name = thread_data["name"]
         channel_id = thread_data["channel_id"]
 
+        # The reply is posted where the command runs, and it carries the
+        # parent channel's memory and people notes — so only allow it from the
+        # thread itself or its parent channel, never from another channel
+        if str(ctx.channel.id) not in (str(thread_id), str(channel_id)):
+            await ctx.respond("⚠️ Run this from the thread or its parent channel.", ephemeral=True)
+            return
+
         # Get thread-specific model and system prompt from DB
         thread_config = self.state.get_discord_thread_config(thread_id)
         thread_model = thread_config.get("model") if thread_config else None
@@ -292,12 +296,11 @@ class ThreadCommands(commands.Cog):
                 await ctx.respond(f"**{ctx.author.display_name}** in **{thread_name}**: {message}\n\n_Processing response..._")
                 processing_msg = None
 
-            # Fall back to effective system prompt (persona > channel config > global)
-            if not thread_system_prompt:
-                thread_system_prompt = self.state.get_effective_system_prompt(channel_id)
-                if not thread_system_prompt:
-                     # Fallback to global system prompt
-                     thread_system_prompt = self.openrouter_client.system_prompt # Use the default from client init
+            # Thread prompt, falling back to persona > channel config > global,
+            # with the parent channel's memory and people notes appended
+            thread_system_prompt = self.state.get_effective_system_prompt(
+                channel_id, speaker_id=str(ctx.author.id), history=conversation_context,
+                base_prompt=thread_system_prompt)
 
 
             response = await self.openrouter_client.send_message_with_history(
@@ -609,6 +612,7 @@ class ThreadCommands(commands.Cog):
                 "role": "user",
                 "name": message.author.display_name,
                 "user_id": str(message.author.id),
+                "is_bot": message.author.bot,
                 "content": resolve_discord_mentions(message),
                 # timestamp is added in add_discord_thread_message
             })
@@ -625,12 +629,12 @@ class ThreadCommands(commands.Cog):
             # Determine the model to use (thread-specific > channel-specific > global)
             model_to_use = thread_model if thread_model else self.get_model_for_channel(channel_id)
 
-            # Determine the system prompt to use (thread-specific > channel-specific > global)
-            system_prompt_to_use = thread_system_prompt
-            if not system_prompt_to_use:
-                system_prompt_to_use = self.state.get_effective_system_prompt(channel_id)
-                if not system_prompt_to_use:
-                     system_prompt_to_use = self.openrouter_client.system_prompt # Fallback to default
+            # Determine the system prompt to use (thread-specific > channel-specific > global).
+            # A thread's own prompt still gets the multi-user framing, the parent
+            # channel's memory and the notes on the people in this thread.
+            system_prompt_to_use = self.state.get_effective_system_prompt(
+                channel_id, query=message.content, speaker_id=str(message.author.id),
+                history=conversation_context, base_prompt=thread_system_prompt)
 
             # Temporarily set the model for this request
             current_model = self.openrouter_client.model

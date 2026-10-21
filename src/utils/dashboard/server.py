@@ -27,6 +27,8 @@ from .auth import (
     verify_secret,
 )
 from .error_log import ErrorLogBuffer
+from ..memory_service import archive_and_prune, llm_clients, summarize_and_clear
+from .. import user_memory
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +50,15 @@ SETTINGS_INT_RANGES = {
     'max_memory_summaries': (1, 50),
     'tool_calling_max_iterations': (1, 10),
 }
-SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'tool_calling_enabled')
+SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
 }
+CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled')
 CHANNEL_OVERRIDE_FIELDS = (
     'model', 'provider', 'system_prompt',
-    'session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
+    'session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries', 'user_memory_enabled',
 )
 
 
@@ -319,6 +322,10 @@ class DashboardServer:
         router.add_get('/api/memory/{channel_id}', self._handle_get_channel_memories)
         router.add_delete('/api/memory/{channel_id}', self._handle_delete_channel_memories)
         router.add_post('/api/memory/{channel_id}/summarize', self._handle_trigger_summarize)
+        router.add_get('/api/memory/{channel_id}/users', self._handle_get_user_notes)
+        router.add_delete('/api/memory/{channel_id}/users', self._handle_delete_channel_user_notes)
+        router.add_put('/api/memory/{channel_id}/users/{user_id}', self._handle_update_user_notes)
+        router.add_delete('/api/memory/{channel_id}/users/{user_id}', self._handle_delete_user_notes)
 
         # Persona API
         router.add_get('/api/personas/templates', self._handle_get_persona_templates)
@@ -522,6 +529,7 @@ class DashboardServer:
             'session_timeout_hours': state.get_session_timeout_hours(),
             'memory_summary_enabled': state.get_memory_summary_enabled(),
             'max_memory_summaries': state.get_max_memory_summaries(),
+            'user_memory_enabled': state.get_user_memory_enabled(),
             'tool_calling_enabled': state.get_tool_calling_enabled(),
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
         })
@@ -581,6 +589,7 @@ class DashboardServer:
             'session_timeout_hours': state.set_session_timeout_hours,
             'memory_summary_enabled': state.set_memory_summary_enabled,
             'max_memory_summaries': state.set_max_memory_summaries,
+            'user_memory_enabled': state.set_user_memory_enabled,
             'tool_calling_enabled': state.set_tool_calling_enabled,
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
         }
@@ -617,7 +626,7 @@ class DashboardServer:
         cursor = self.bot.state_manager.db_manager._get_cursor()
         cursor.execute(
             "SELECT channel_id, model, provider, system_prompt, session_timeout_hours, "
-            "memory_summary_enabled, max_memory_summaries FROM CHANNEL_CONFIG"
+            "memory_summary_enabled, max_memory_summaries, user_memory_enabled FROM CHANNEL_CONFIG"
         )
         return {row['channel_id']: dict(row) for row in cursor.fetchall()}
 
@@ -669,7 +678,8 @@ class DashboardServer:
 
         memory_config = {
             name: state._get_channel_memory_config(channel_id, name)
-            for name in ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries')
+            for name in ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
+                         'user_memory_enabled')
         }
 
         raw_persona = state.get_channel_persona(channel_id)
@@ -703,6 +713,7 @@ class DashboardServer:
             'effective_session_timeout': state.get_effective_session_timeout(channel_id),
             'effective_memory_summary_enabled': state.get_effective_memory_summary_enabled(channel_id),
             'effective_max_memory_summaries': state.get_effective_max_memory_summaries(channel_id),
+            'effective_user_memory_enabled': state.get_effective_user_memory_enabled(channel_id),
             'persona': persona,
             'sources': sources,
         })
@@ -743,13 +754,13 @@ class DashboardServer:
                     memory_kwargs[name] = None if value is None else coerce_int(value, name, low, high)
                 except ValueError as e:
                     errors[name] = str(e)
-        if 'memory_summary_enabled' in data:
-            try:
-                value = data['memory_summary_enabled']
-                memory_kwargs['memory_summary_enabled'] = (
-                    None if value is None else coerce_bool(value, 'memory_summary_enabled'))
-            except ValueError as e:
-                errors['memory_summary_enabled'] = str(e)
+        for name in CHANNEL_MEMORY_BOOL_FIELDS:
+            if name in data:
+                try:
+                    value = data[name]
+                    memory_kwargs[name] = None if value is None else coerce_bool(value, name)
+                except ValueError as e:
+                    errors[name] = str(e)
 
         if errors:
             raise validation_error(errors)
@@ -784,6 +795,8 @@ class DashboardServer:
         channel_id = request.match_info['channel_id']
         state = self.bot.state_manager
         result = state.reset_channel_config(channel_id)
+        # The reset dialog promises memory overrides go too (incl. per-user memory)
+        state.reset_channel_memory_config(channel_id)
 
         await self._broadcast_ws({'type': 'channel_reset', 'channel_id': channel_id})
         return web.json_response({'status': 'ok', 'reset': result})
@@ -1311,7 +1324,7 @@ class DashboardServer:
 
     async def _handle_prune(self, request):
         """Trigger manual data pruning."""
-        stats = await self._db(self.bot.state_manager.prune_old_data)
+        stats = await archive_and_prune(self.bot.state_manager, llm_clients(self.bot), run_blocking=self._db)
         await self._broadcast_ws({'type': 'prune_completed', 'stats': stats})
         return web.json_response({'status': 'ok', 'stats': stats})
 
@@ -1583,9 +1596,77 @@ class DashboardServer:
         """Get per-channel memory summary statistics."""
         state = self.bot.state_manager
         stats = state.get_all_memory_stats()
+        user_counts = state.get_user_memory_stats()
+        seen = set()
+        for entry in stats:
+            seen.add(entry['channel_id'])
+            entry['user_count'] = user_counts.get(entry['channel_id'], 0)
+        # Channels with people notes but no summaries yet
+        for channel_id, count in user_counts.items():
+            if channel_id not in seen:
+                stats.append({'channel_id': channel_id, 'summary_count': 0,
+                              'latest_summary_at': None, 'user_count': count})
         for entry in stats:
             entry['channel_name'] = self._channel_info(entry['channel_id'])['channel_name']
+            if entry.get('latest_summary_at') is not None:
+                entry['latest_summary_at'] = str(entry['latest_summary_at'])
         return web.json_response(stats)
+
+    @staticmethod
+    def _user_notes_json(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'user_id': row['user_id'],
+            'display_name': row.get('display_name'),
+            'notes': row['notes'],
+            'message_count': row.get('message_count', 0),
+            'created_at': str(row['created_at']) if row.get('created_at') else None,
+            'updated_at': str(row['updated_at']) if row.get('updated_at') else None,
+        }
+
+    async def _handle_get_user_notes(self, request):
+        """List the per-user notes kept for one channel."""
+        channel_id = request.match_info['channel_id']
+        state = self.bot.state_manager
+        return web.json_response({
+            'channel_id': channel_id,
+            'channel_name': self._channel_info(channel_id)['channel_name'],
+            'enabled': state.get_effective_user_memory_enabled(channel_id),
+            'users': [self._user_notes_json(r) for r in state.list_channel_user_notes(channel_id)],
+        })
+
+    async def _handle_update_user_notes(self, request):
+        """Replace one user's notes in one channel."""
+        channel_id = request.match_info['channel_id']
+        user_id = request.match_info['user_id']
+        data = await read_json_object(request)
+        notes = data.get('notes')
+        if not isinstance(notes, str):
+            raise validation_error({'notes': 'notes must be a string'})
+        cleaned = user_memory.join_notes(user_memory.split_notes(notes))
+        if not cleaned:
+            raise validation_error({'notes': 'notes must not be empty; delete them instead'})
+
+        state = self.bot.state_manager
+        if not state.get_user_notes(channel_id, user_id):
+            return web.json_response({'error': 'No notes for this user in this channel.'}, status=404)
+        state.set_user_notes(channel_id, user_id, cleaned)
+        await self._broadcast_ws({'type': 'memory_updated', 'channel_id': channel_id})
+        return web.json_response({'status': 'ok', **self._user_notes_json(state.get_user_notes(channel_id, user_id))})
+
+    async def _handle_delete_user_notes(self, request):
+        """Delete one user's notes in one channel."""
+        channel_id = request.match_info['channel_id']
+        user_id = request.match_info['user_id']
+        deleted = self.bot.state_manager.delete_user_notes(channel_id, user_id)
+        await self._broadcast_ws({'type': 'memory_updated', 'channel_id': channel_id})
+        return web.json_response({'status': 'ok', 'deleted': deleted})
+
+    async def _handle_delete_channel_user_notes(self, request):
+        """Delete every user's notes in one channel."""
+        channel_id = request.match_info['channel_id']
+        deleted = self.bot.state_manager.delete_channel_user_notes(channel_id)
+        await self._broadcast_ws({'type': 'memory_updated', 'channel_id': channel_id})
+        return web.json_response({'status': 'ok', 'deleted': deleted})
 
     async def _handle_get_channel_memories(self, request):
         """Get stored memory summaries for a channel."""
@@ -1616,30 +1697,23 @@ class DashboardServer:
         channel_id = request.match_info['channel_id']
         state = self.bot.state_manager
 
-        history = state.get_channel_history(channel_id)
-        if not history:
+        if not state.get_channel_message_count(channel_id):
             return web.json_response({'error': 'No conversation history to summarize.'}, status=400)
 
-        clients = {
-            'openrouter': getattr(self.bot, 'openrouter_client', None),
-            'openai': getattr(self.bot, 'openai_client', None),
-        }
+        clients = llm_clients(self.bot)
         if not any(clients.values()):
             return web.json_response({'error': 'No LLM client available for summarization.'}, status=503)
 
-        from ..memory_service import _summarize_history, _parse_timestamp
-        conversation_start = _parse_timestamp(history[0].get('timestamp')) if history else None
-        summary = await _summarize_history(history, channel_id, state, clients)
+        # Takes the channel's memory lock and deletes only the summarized
+        # rows, so it can't race rotation/compaction or drop new messages
+        summary, archived = await summarize_and_clear(channel_id, state, clients)
+        if not archived:
+            return web.json_response({'error': 'No conversation history to summarize.'}, status=400)
         if not summary:
             return web.json_response({'error': 'Summarization failed or returned empty result.'}, status=502)
 
-        state.add_channel_memory(channel_id, summary, len(history), conversation_start=conversation_start)
-        max_summaries = state.get_effective_max_memory_summaries(channel_id)
-        state.prune_channel_memories(channel_id, max_summaries)
-        state.clear_channel_history(channel_id)
-
         await self._broadcast_ws({'type': 'memory_updated', 'channel_id': channel_id})
-        return web.json_response({'status': 'ok', 'summary': summary, 'messages_archived': len(history)})
+        return web.json_response({'status': 'ok', 'summary': summary, 'messages_archived': archived})
 
     # ── Persona Handlers ─────────────────────────────────────────
 

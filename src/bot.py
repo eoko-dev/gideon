@@ -22,6 +22,7 @@ from .config import (
 from .utils.state_manager import BotStateManager
 from .utils.webhook_sender import WebhookSender
 from .utils.reminder_service import deliver_due_reminders
+from .utils.memory_service import archive_and_prune, llm_clients
 from .utils.openrouter_client import OpenRouterClient
 from .utils.openai_client import OpenAIClient
 from .utils.ai_horde_client import AIHordeClient
@@ -103,6 +104,8 @@ async def _setup_state() -> BotStateManager:
     state = BotStateManager()
     await state.initialize_state()
     state.set_model_manager(bot.model_manager)
+    # Lets the state manager map a thread to its parent's memory scope
+    state.set_channel_resolver(bot.get_channel)
     bot.state_manager = state
     logger.info(f"State manager initialized. Global model: {state.get_global_model()}")
 
@@ -305,7 +308,8 @@ async def prune_data_task():
 
     logger.info("Running periodic data pruning...")
     try:
-        prune_stats = bot.state_manager.prune_old_data()
+        # Summarizes channel history before the time window deletes it
+        prune_stats = await archive_and_prune(bot.state_manager, llm_clients(bot))
         logger.info(f"Data pruning finished: {prune_stats}")
     except Exception as e:
         logger.error(f"Error during scheduled data pruning: {e}", exc_info=True)

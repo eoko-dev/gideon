@@ -72,6 +72,7 @@
         session_timeout_hours: 'setting-session-timeout',
         max_memory_summaries: 'setting-max-summaries',
         memory_summary_enabled: 'setting-memory-summary',
+        user_memory_enabled: 'setting-user-memory',
         tool_calling_enabled: 'tool-calling-enabled',
         tool_calling_max_iterations: 'tool-calling-max-iterations'
     };
@@ -82,7 +83,8 @@
         system_prompt: 'channel-edit-prompt',
         session_timeout_hours: 'channel-edit-timeout',
         memory_summary_enabled: 'channel-edit-summary',
-        max_memory_summaries: 'channel-edit-max-summaries'
+        max_memory_summaries: 'channel-edit-max-summaries',
+        user_memory_enabled: 'channel-edit-user-memory'
     };
 
     var OVERRIDE_LABELS = {
@@ -91,7 +93,8 @@
         system_prompt: 'Prompt',
         session_timeout_hours: 'Timeout',
         memory_summary_enabled: 'Summaries',
-        max_memory_summaries: 'Max summaries'
+        max_memory_summaries: 'Max summaries',
+        user_memory_enabled: 'Per-user memory'
     };
 
     var formTrackers = {};
@@ -820,6 +823,7 @@
         $('#setting-session-timeout').value = data.session_timeout_hours || 24;
         $('#setting-max-summaries').value = data.max_memory_summaries || 10;
         $('#setting-memory-summary').value = data.memory_summary_enabled !== false ? 'true' : 'false';
+        $('#setting-user-memory').value = data.user_memory_enabled !== false ? 'true' : 'false';
 
         var tcEnabled = data.tool_calling_enabled !== false;
         $('#tool-calling-enabled').checked = tcEnabled;
@@ -909,7 +913,8 @@
             await api('PUT', '/api/settings', {
                 session_timeout_hours: timeout,
                 max_memory_summaries: maxSummaries,
-                memory_summary_enabled: $('#setting-memory-summary').value === 'true'
+                memory_summary_enabled: $('#setting-memory-summary').value === 'true',
+                user_memory_enabled: $('#setting-user-memory').value === 'true'
             });
             markOwnWrite();
             showSaveStatus('memory-settings-save-status', 'Memory settings saved', false);
@@ -1098,6 +1103,15 @@
                     return source === 'channel' ? $('#channel-edit-max-summaries').value : (source === 'persona' ? d.effective_max_memory_summaries : g.max_memory_summaries);
                 },
                 global: function () { return g.max_memory_summaries; }
+            },
+            {
+                key: 'user_memory_enabled', hint: '#channel-user-memory-hint',
+                hasValue: function () { return $('#channel-edit-user-memory').value !== ''; },
+                effective: function (source) {
+                    return source === 'channel' ? formatSummaryFlag($('#channel-edit-user-memory').value)
+                        : formatSummaryFlag(g.user_memory_enabled !== false);
+                },
+                global: function () { return formatSummaryFlag(g.user_memory_enabled !== false); }
             }
         ];
     }
@@ -1163,6 +1177,7 @@
         $('#channel-edit-timeout').value = data.session_timeout_hours != null ? data.session_timeout_hours : '';
         $('#channel-edit-summary').value = data.memory_summary_enabled == null ? '' : String(data.memory_summary_enabled);
         $('#channel-edit-max-summaries').value = data.max_memory_summaries != null ? data.max_memory_summaries : '';
+        $('#channel-edit-user-memory').value = data.user_memory_enabled == null ? '' : String(!!data.user_memory_enabled);
 
         var note = $('#channel-persona-note');
         var persona = data.persona;
@@ -1226,12 +1241,14 @@
         if (invalid) return;
 
         var summary = $('#channel-edit-summary').value;
+        var userMemory = $('#channel-edit-user-memory').value;
         var body = {
             model: $('#channel-edit-model').value || null,
             system_prompt: $('#channel-edit-prompt').value || null,
             session_timeout_hours: timeout,
             memory_summary_enabled: summary === '' ? null : summary === 'true',
-            max_memory_summaries: maxSummaries
+            max_memory_summaries: maxSummaries,
+            user_memory_enabled: userMemory === '' ? null : userMemory === 'true'
         };
         if (provider) body.provider = provider;
 
@@ -3164,10 +3181,10 @@
             var rows = stats.map(function (s) {
                 var name = s.channel_name || s.channel_id;
                 var latest = s.latest_summary_at ? String(s.latest_summary_at).substring(0, 16) : '-';
-                return '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(s.summary_count) + '</td><td>' + escapeHtml(latest) + '</td>' +
+                return '<tr><td>' + escapeHtml(name) + '</td><td>' + escapeHtml(s.summary_count) + '</td><td>' + escapeHtml(s.user_count || 0) + '</td><td>' + escapeHtml(latest) + '</td>' +
                     '<td class="cell-actions"><button type="button" class="btn btn-secondary btn-sm" ' + actionAttrs('viewChannelMemories', [s.channel_id, name]) + ' aria-label="View memories for ' + escapeHtml(name) + '">View</button></td></tr>';
             });
-            container.innerHTML = '<table class="data-table"><thead><tr><th scope="col">Channel</th><th scope="col">Summaries</th><th scope="col">Latest</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+            container.innerHTML = '<table class="data-table"><thead><tr><th scope="col">Channel</th><th scope="col">Summaries</th><th scope="col">People</th><th scope="col">Latest</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
         } catch (e) {
             if (e.status !== 401) container.innerHTML = emptyState('alert-triangle', 'Could not load memory stats', describeError(e));
         }
@@ -3181,6 +3198,7 @@
         $('#memory-channel-title').textContent = 'Memories: #' + currentMemoryChannelName;
         card.hidden = false;
         list.innerHTML = skeleton('rows', 3);
+        loadUserNotes(channelId);
         try {
             var data = await api('GET', '/api/memory/' + encodeURIComponent(channelId));
             var memories = data.memories || [];
@@ -3199,13 +3217,102 @@
         }
     }
 
+    async function loadUserNotes(channelId) {
+        var list = $('#memory-people-list');
+        var hint = $('#memory-people-hint');
+        list.innerHTML = skeleton('rows', 2);
+        try {
+            var data = await api('GET', '/api/memory/' + encodeURIComponent(channelId) + '/users');
+            if (channelId !== currentMemoryChannelId) return;
+            hint.textContent = data.enabled
+                ? 'Notes Gideon keeps about each person, used only in this channel. Edit one per line.'
+                : 'Per-user memory is disabled for this channel; existing notes are kept but not used.';
+            var users = data.users || [];
+            if (users.length === 0) {
+                list.innerHTML = emptyState('database', 'No people notes for this channel');
+                return;
+            }
+            list.innerHTML = users.map(function (u) {
+                var name = u.display_name || u.user_id;
+                var updated = String(u.updated_at || '').substring(0, 16);
+                return '<div class="memory-entry"><div class="memory-meta">' + escapeHtml(name) + ' &bull; ' + escapeHtml(u.user_id) +
+                    ' &bull; ' + escapeHtml(u.message_count) + ' messages &bull; updated ' + escapeHtml(updated) + '</div>' +
+                    '<label class="sr-only" for="user-notes-' + escapeHtml(u.user_id) + '">Notes for ' + escapeHtml(name) + '</label>' +
+                    '<textarea id="user-notes-' + escapeHtml(u.user_id) + '" rows="4">' + escapeHtml(u.notes) + '</textarea>' +
+                    '<div class="form-actions">' +
+                    '<button type="button" class="btn btn-secondary btn-sm" ' + actionAttrs('saveUserNotes', [u.user_id, name]) + '>Save</button>' +
+                    '<button type="button" class="btn btn-danger btn-sm" ' + actionAttrs('deleteUserNotes', [u.user_id, name]) + '>Delete</button>' +
+                    '</div></div>';
+            }).join('');
+        } catch (e) {
+            if (e.status !== 401) list.innerHTML = emptyState('alert-triangle', 'Could not load people notes', describeError(e));
+        }
+    }
+
+    async function saveUserNotes(userId, name) {
+        if (!currentMemoryChannelId) return;
+        var input = document.getElementById('user-notes-' + userId);
+        if (!input) return;
+        try {
+            await api('PUT', '/api/memory/' + encodeURIComponent(currentMemoryChannelId) + '/users/' + encodeURIComponent(userId),
+                { notes: input.value });
+            markOwnWrite();
+            toast.success('Notes saved for ' + name + '.');
+            loadUserNotes(currentMemoryChannelId);
+        } catch (e) {
+            if (e.status !== 401) toast.error(describeError(e), { title: 'Could not save notes' });
+        }
+    }
+
+    async function deleteUserNotes(userId, name) {
+        if (!currentMemoryChannelId) return;
+        var ok = await confirmDialog({
+            title: 'Delete notes about ' + name + '?',
+            message: 'Gideon forgets what it knows about ' + name + ' in #' + (currentMemoryChannelName || currentMemoryChannelId) + '.',
+            details: ['Notes about them in other channels are not affected', 'This cannot be undone'],
+            confirmLabel: 'Delete notes'
+        });
+        if (!ok) return;
+        try {
+            await api('DELETE', '/api/memory/' + encodeURIComponent(currentMemoryChannelId) + '/users/' + encodeURIComponent(userId));
+            markOwnWrite();
+            toast.success('Notes deleted for ' + name + '.');
+            loadUserNotes(currentMemoryChannelId);
+            loadMemoryStats();
+        } catch (e) {
+            if (e.status !== 401) toast.error(describeError(e), { title: 'Could not delete notes' });
+        }
+    }
+
+    async function clearChannelUserNotes() {
+        if (!currentMemoryChannelId) return;
+        var name = currentMemoryChannelName || currentMemoryChannelId;
+        var ok = await confirmDialog({
+            title: 'Clear all people notes?',
+            message: 'Every note Gideon keeps about people in #' + name + ' will be deleted.',
+            details: ['Notes in other channels are not affected', 'This cannot be undone'],
+            confirmLabel: 'Clear people notes',
+            requireText: 'DELETE'
+        });
+        if (!ok) return;
+        try {
+            await api('DELETE', '/api/memory/' + encodeURIComponent(currentMemoryChannelId) + '/users');
+            markOwnWrite();
+            toast.success('People notes cleared for #' + name + '.');
+            loadUserNotes(currentMemoryChannelId);
+            loadMemoryStats();
+        } catch (e) {
+            if (e.status !== 401) toast.error(describeError(e), { title: 'Could not clear people notes' });
+        }
+    }
+
     async function clearChannelMemories() {
         if (!currentMemoryChannelId) return;
         var name = currentMemoryChannelName || currentMemoryChannelId;
         var ok = await confirmDialog({
             title: 'Clear all memories?',
             message: 'Every stored memory summary for #' + name + ' will be deleted.',
-            details: ['Gideon forgets the long-term context of this channel', 'This cannot be undone'],
+            details: ['Gideon forgets the long-term context of this channel', 'Notes about people are kept; clear them separately', 'This cannot be undone'],
             confirmLabel: 'Clear memories',
             requireText: 'DELETE'
         });
@@ -3259,6 +3366,8 @@
         editKey: function (a, el) { openKeyModal({ id: a[0], provider: a[1], alias: a[2], opener: el }); },
         deleteKey: function (a, el) { deleteKey(a[0], a[1], el); },
         viewChannelMemories: function (a) { viewChannelMemories(a[0], a[1]); },
+        saveUserNotes: function (a) { saveUserNotes(a[0], a[1]); },
+        deleteUserNotes: function (a) { deleteUserNotes(a[0], a[1]); },
         loadMemoryStats: function () { loadMemoryStats(); }
     };
 
@@ -3360,7 +3469,7 @@
         bindEvent('#channel-edit-form', 'submit', saveChannel);
         bindEvent('#channel-reset-btn', 'click', resetChannel);
         bindEvent('#channel-edit-provider', 'change', onChannelProviderChange);
-        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries'].forEach(function (sel) {
+        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory'].forEach(function (sel) {
             bindEvent(sel, 'input', updateSourceChips);
             bindEvent(sel, 'change', updateSourceChips);
         });
@@ -3436,6 +3545,7 @@
         // Memory & activity
         bindEvent('#memory-clear-btn', 'click', clearChannelMemories);
         bindEvent('#memory-summarize-btn', 'click', triggerSummarize);
+        bindEvent('#memory-clear-people-btn', 'click', clearChannelUserNotes);
         bindEvent('#clear-activity-btn', 'click', resetActivityFeed);
 
         // API keys

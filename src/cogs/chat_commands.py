@@ -260,13 +260,15 @@ class ChatCommands(commands.Cog):
         # Check for session expiry and rotate if needed (before fetching history)
         await check_and_rotate_session(channel_id, self.state, self.clients)
 
-        # Get effective system prompt (persona > channel config > global, with
-        # memory summaries relevant to the current message injected)
-        channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=message)
-
         try:
             # Get recent channel context from state manager
             conversation_context = self.state.get_channel_history(channel_id)
+
+            # Get effective system prompt (persona > channel config > global, with
+            # memory summaries relevant to the current message and this channel's
+            # notes on the speaker and other participants injected)
+            channel_system_prompt = self.state.get_effective_system_prompt(
+                channel_id, query=message, speaker_id=str(ctx.author.id), history=conversation_context)
 
             # Add this new message
             await self.state.add_to_channel_history(channel_id, {
@@ -404,10 +406,9 @@ class ChatCommands(commands.Cog):
             # clear_channel_history returns False if no messages were deleted
             await ctx.respond("No conversation history found for this channel.")
 
-    @discord.slash_command(
-        name="memory",
-        description="Show conversation memory status for this channel"
-    )
+    memory = discord.SlashCommandGroup("memory", "What Gideon remembers in this channel")
+
+    @memory.command(name="status", description="Show conversation memory status for this channel")
     async def channel_memory_slash(self, ctx):
         channel_id = str(ctx.channel.id)
         history = self.state.get_channel_history(channel_id)
@@ -436,7 +437,79 @@ class ChatCommands(commands.Cog):
 
         lines.append(f"**Auto-summarize on reset:** {'Enabled' if summary_enabled else 'Disabled'}")
 
+        if self.state.get_effective_user_memory_enabled(channel_id):
+            people = len(self.state.list_channel_user_notes(channel_id))
+            lines.append(f"**Per-user memory:** Enabled — notes kept for {people} person(s) in this channel. "
+                         f"Use `/memory me` to see yours.")
+        else:
+            lines.append("**Per-user memory:** Disabled in this channel.")
+
         await ctx.respond("\n".join(lines))
+
+    @memory.command(name="me", description="Show what Gideon remembers about you in this channel")
+    async def memory_me_slash(self, ctx):
+        user_id = str(ctx.author.id)
+        if self.state.is_user_memory_opted_out(user_id):
+            await ctx.respond("You've opted out of per-user memory, so nothing is kept about you. "
+                              "Use `/memory optin` to turn it back on.", ephemeral=True)
+            return
+        if not self.state.get_effective_user_memory_enabled(str(ctx.channel.id)):
+            await ctx.respond("Per-user memory is disabled in this channel.", ephemeral=True)
+            return
+
+        row = self.state.get_user_notes(str(ctx.channel.id), user_id)
+        if not row or not row.get("notes"):
+            await ctx.respond("I don't have any notes about you in this channel yet.", ephemeral=True)
+            return
+        await ctx.respond("**What I remember about you in this channel:**\n" + row["notes"][:1900]
+                          + "\n\n-# These notes only apply here. `/memory forget` removes them.",
+                          ephemeral=True)
+
+    @memory.command(name="forget", description="Delete what Gideon remembers about you")
+    async def memory_forget_slash(
+        self, ctx,
+        scope: discord.Option(str, "Where to forget you", choices=["this channel", "everywhere"],
+                              default="this channel"),
+    ):
+        user_id = str(ctx.author.id)
+        if scope == "everywhere":
+            deleted = self.state.delete_user_notes_everywhere(user_id)
+            where = "in every channel"
+        else:
+            deleted = self.state.delete_user_notes(str(ctx.channel.id), user_id)
+            where = "in this channel"
+        if deleted:
+            await ctx.respond(f"Done — I've forgotten my notes about you {where}.", ephemeral=True)
+        else:
+            await ctx.respond(f"I didn't have any notes about you {where}.", ephemeral=True)
+
+    @memory.command(name="optout", description="Stop Gideon from keeping notes about you, in every channel")
+    async def memory_optout_slash(self, ctx):
+        deleted = self.state.set_user_memory_opt_out(str(ctx.author.id), True)
+        suffix = f" I also deleted my notes about you in {deleted} channel(s)." if deleted else ""
+        await ctx.respond("You're opted out: I won't keep notes about you anywhere." + suffix
+                          + " Use `/memory optin` to change your mind.", ephemeral=True)
+
+    @memory.command(name="optin", description="Let Gideon keep notes about you again")
+    async def memory_optin_slash(self, ctx):
+        self.state.set_user_memory_opt_out(str(ctx.author.id), False)
+        await ctx.respond("You're opted back in. I'll keep notes about you separately in each channel.",
+                          ephemeral=True)
+
+    @memory.command(name="forget_user", description="Delete what Gideon remembers about a member in this channel (admin)")
+    async def memory_forget_user_slash(
+        self, ctx,
+        user: discord.Option(discord.Member, "Whose notes to delete"),
+    ):
+        permissions = getattr(ctx.author, "guild_permissions", None)
+        if not permissions or not permissions.administrator:
+            await ctx.respond("⚠️ Only server administrators can delete someone else's notes.", ephemeral=True)
+            return
+        deleted = self.state.delete_user_notes(str(ctx.channel.id), str(user.id))
+        if deleted:
+            await ctx.respond(f"Deleted my notes about {user.display_name} in this channel.", ephemeral=True)
+        else:
+            await ctx.respond(f"I had no notes about {user.display_name} in this channel.", ephemeral=True)
 
     @discord.slash_command(
         name="summarize",
@@ -510,7 +583,8 @@ class ChatCommands(commands.Cog):
             }
 
             # Get effective system prompt (persona > channel config > global)
-            channel_system_prompt = self.state.get_effective_system_prompt(channel_id, query=query)
+            channel_system_prompt = self.state.get_effective_system_prompt(
+                channel_id, query=query, speaker_id=str(ctx.author.id))
 
             # Add a search-focused wrapper to the system prompt
             search_system_prompt = build_search_system_prompt(channel_system_prompt)

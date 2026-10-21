@@ -184,6 +184,20 @@ class SchemaManager:
             conversation_start DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        """,
+        # Per-user notes, scoped to one channel: (channel_id, user_id) is the
+        # key, so a user's notes in one channel are never visible in another
+        """
+        CREATE TABLE IF NOT EXISTS CHANNEL_USER_MEMORY (
+            channel_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            display_name TEXT,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (channel_id, user_id)
+        );
         """
     ]
 
@@ -207,7 +221,8 @@ class SchemaManager:
         """CREATE INDEX IF NOT EXISTS idx_channel_personas_active ON CHANNEL_PERSONAS (is_active);""",
         """CREATE INDEX IF NOT EXISTS idx_persona_templates_builtin ON PERSONA_TEMPLATES (is_builtin);""",
         """CREATE INDEX IF NOT EXISTS idx_channel_memory_channel_id ON CHANNEL_MEMORY (channel_id);""",
-        """CREATE INDEX IF NOT EXISTS idx_channel_memory_created_at ON CHANNEL_MEMORY (channel_id, created_at);"""
+        """CREATE INDEX IF NOT EXISTS idx_channel_memory_created_at ON CHANNEL_MEMORY (channel_id, created_at);""",
+        """CREATE INDEX IF NOT EXISTS idx_channel_user_memory_user ON CHANNEL_USER_MEMORY (user_id);"""
     ]
 
     @staticmethod
@@ -235,6 +250,8 @@ class SchemaManager:
                 SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "max_memory_summaries", "INTEGER")
                 SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_MEMORY", "conversation_start", "DATETIME")
                 SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "user_name", "TEXT")
+                SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "is_bot", "INTEGER")
+                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "user_memory_enabled", "INTEGER")
                 SchemaManager._create_memory_fts(cursor)
 
                 logger.info("Database schema migration checks complete.")
