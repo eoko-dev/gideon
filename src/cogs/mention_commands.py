@@ -8,12 +8,12 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
-from ..utils.memory_service import check_and_rotate_session, schedule_compaction
-from ..utils.discord_fmt import chunk_message
+from ..utils.conversation_service import Conversation, ConversationService, ReplyRequest
+from ..utils.llm_result import call_chat
+from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from ..utils.timeutil import to_epoch
-from ..utils.tool_registry import get_tool_definitions, execute_tool, is_no_repeat_tool
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
+from ..utils.llm_formatting import resolve_discord_mentions
 from ..config import DEFAULT_MODEL
 
 logger = logging.getLogger('mention_commands')
@@ -25,11 +25,7 @@ class MentionCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.state = bot.state_manager
-        self.clients = {
-            "openrouter": getattr(bot, 'openrouter_client', None),
-            "openai": getattr(bot, 'openai_client', None),
-            "ai_horde": getattr(bot, 'ai_horde_client', None)
-        }
+        self.service = getattr(bot, 'conversation_service', None) or ConversationService(bot)
         # Channels the bot participates in — history is only recorded for
         # these, so the bot doesn't log every channel it can merely see.
         self._active_channels: Optional[set] = None
@@ -37,6 +33,11 @@ class MentionCommands(commands.Cog):
         # read history up to that point only, so messages that land while a
         # reply is in flight can't be mistaken for the turn being answered.
         self._history_anchors: Dict[int, datetime] = {}
+
+    @property
+    def clients(self) -> Dict[str, Any]:
+        """Provider clients, read live so dashboard key rotation applies."""
+        return llm_clients(self.bot)
 
     def get_model_for_channel(self, channel_id):
         """Get the appropriate model for this channel"""
@@ -57,9 +58,11 @@ class MentionCommands(commands.Cog):
     async def _send_reply(self, message: discord.Message, channel_id: str,
                           text: str, history: List[Dict[str, Any]]):
         """Sends an LLM reply in chunks, turning '@Name' into real pings."""
-        text = apply_outbound_mentions(text, collect_mention_targets(history, [message.author, *message.mentions]))
-        for chunk in chunk_message(text):
-            await self.bot.webhook_sender.send_response(message.channel, chunk, channel_id)
+        await self.service.send(self._conversation(message, channel_id), text, history,
+                                [message.author, *message.mentions])
+
+    def _conversation(self, message: discord.Message, channel_id: str) -> Conversation:
+        return Conversation(channel=message.channel, channel_id=channel_id)
 
     # ─── History recording guard ────────────────────────────────────────────
 
@@ -102,16 +105,16 @@ class MentionCommands(commands.Cog):
         still gets a conversational response with the error context.
         """
         content = user_content if user_content is not None else (self._strip_mentions(message.content) or "Hello!")
+        conversation = self._conversation(message, channel_id)
 
-        provider, model_name = self.state.resolve_model(channel_id)
-        client_to_use = self.clients.get(provider)
-        if not client_to_use or not hasattr(client_to_use, 'send_message_with_history'):
+        provider, model_name, client_to_use = self.service.resolve(conversation)
+        if client_to_use is None:
             await message.channel.send(f"{prefix}Additionally, the conversation system is unavailable.")
             return
 
         conversation_context = self._history_for(message, channel_id)
-        channel_system_prompt = self.state.get_effective_system_prompt(
-            channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
+        channel_system_prompt = self.service.system_prompt(
+            conversation, content, str(message.author.id), conversation_context)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -120,13 +123,13 @@ class MentionCommands(commands.Cog):
 
         try:
             async with message.channel.typing():
-                response = await client_to_use.send_message_with_history(
-                    messages=conversation_context,
-                    model=model_name,
-                    system_prompt=channel_system_prompt
-                )
+                result = await self.service.generate(
+                    client_to_use, model_name, conversation_context, channel_system_prompt)
+            if not result.ok:
+                await message.channel.send(f"{prefix}Additionally, failed to generate a conversation response.")
+                return
 
-            full_response = f"{prefix}{response}"
+            full_response = f"{prefix}{result.text}"
 
             await self.state.add_to_channel_history(channel_id, {
                 "role": "assistant",
@@ -538,7 +541,8 @@ class MentionCommands(commands.Cog):
         self,
         message: discord.Message,
         channel_id: str,
-        query: str
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Run a web search for the native tool-calling path.
@@ -574,17 +578,16 @@ class MentionCommands(commands.Cog):
                     f"so no search was performed. Answer from your own knowledge and "
                     f"mention that live search was unavailable.")
 
-        # Provider is OpenRouter, proceed with web search
         client_to_use = self.clients.get("openrouter")
         if not client_to_use:
             logger.error("[Tool] OpenRouter client not found")
             return ("Error: the OpenRouter client is not available, so the search "
                     "did not run.")
 
-        # Get conversation context
-        conversation_context = self._history_for(message, channel_id)
+        # The conversation the tool was called from (a thread's own history in
+        # threads), else this channel's history up to the message
+        conversation_context = list(history) if history is not None else self._history_for(message, channel_id)
 
-        # Enhance system prompt for search
         channel_system_prompt = self.state.get_effective_system_prompt(
             channel_id, query=query, speaker_id=str(message.author.id), history=conversation_context)
         search_system_prompt = build_search_system_prompt(channel_system_prompt)
@@ -597,9 +600,9 @@ class MentionCommands(commands.Cog):
         # Temporary status message so the channel sees search activity
         search_msg = await message.channel.send(SEARCHING_STATUS.format(query=query))
 
-        # Perform search
         try:
-            response = await client_to_use.send_message_with_history(
+            result = await call_chat(
+                client_to_use,
                 messages=conversation_context,
                 model=model_name,
                 system_prompt=search_system_prompt,
@@ -607,132 +610,29 @@ class MentionCommands(commands.Cog):
             )
         except Exception as e:
             logger.exception(f"[Tool] Error during web search: {e}")
-            return (f"Error: the web search failed ({e}). Do not retry the same "
-                    f"search; apologise briefly and answer from your own knowledge.")
+            return ("Error: the web search failed. Do not retry the same search; "
+                    "apologise briefly and answer from your own knowledge.")
         finally:
             try:
                 await search_msg.delete()
             except discord.HTTPException:
                 pass
 
-        # The client reports provider failures (rate limits, API errors) as
-        # "⚠️ ..." strings rather than raising, and can return None for a
-        # null-content completion — neither must be dressed up as results.
-        if not isinstance(response, str) or not response.strip():
-            logger.warning(f"[Tool] Web search returned no usable results: {response!r}")
-            return (f"Error: the web search returned no results. Do not retry the "
+        if not result.ok:
+            logger.warning(f"[Tool] Web search failed ({result.error_kind}): {result.detail}")
+            return (f"Error: the web search failed ({result.error}). Do not retry the "
                     f"same search; apologise briefly and answer from your own knowledge.")
-        if response.startswith("⚠️"):
-            logger.warning(f"[Tool] Web search returned a provider error: {response}")
-            return (f"Error: the web search failed with a provider error: {response}\n"
-                    f"Do not retry the same search; apologise briefly and answer "
-                    f"from your own knowledge.")
+        response = result.text
+        if not response.strip():
+            logger.warning("[Tool] Web search returned no usable results")
+            return ("Error: the web search returned no results. Do not retry the "
+                    "same search; apologise briefly and answer from your own knowledge.")
 
         logger.info(f"[Tool] User {message.author.id} performed web search via mention: '{query}'")
 
         return (f"Web search results for '{query}'. The user has NOT seen these — "
                 f"use them to write your reply, keeping any source citations that "
                 f"matter:\n\n{response}")
-
-    # ─── Native tool-calling loop ───────────────────────────────────────────
-
-    async def _run_tool_loop(
-        self,
-        client,
-        conversation_context: List[Dict[str, Any]],
-        model_name: str,
-        system_prompt: Optional[str],
-        images: Optional[List[Dict[str, Any]]],
-        tool_context: Dict[str, Any]
-    ) -> Optional[str]:
-        """Runs the model with tools, feeding results back until it produces text.
-
-        Iterates up to the configured budget; each round's tool results are
-        appended to the conversation so the model can synthesize an answer,
-        chain tools, or recover from a tool error. Returns the final text
-        response (possibly an error string starting with ⚠️).
-        """
-        tools = get_tool_definitions()
-        max_iterations = self.state.get_tool_calling_max_iterations()
-        executed_calls: set = set()
-
-        for iteration in range(max_iterations):
-            response = await client.send_message_with_history(
-                messages=conversation_context,
-                model=model_name,
-                system_prompt=system_prompt,
-                images=images if iteration == 0 else None,
-                tools=tools,
-                tool_choice="auto"
-            )
-
-            # Plain text (normal reply or provider error string)
-            if isinstance(response, str):
-                return response
-
-            if not isinstance(response, dict):
-                logger.error(f"[Tool] Unexpected response type from client: {type(response)}")
-                return None
-
-            tool_calls = response.get("tool_calls")
-            if not tool_calls:
-                return response.get("content") or ""
-
-            logger.info(f"[Tool] Iteration {iteration + 1}/{max_iterations}: model requested {len(tool_calls)} tool call(s)")
-
-            # Record the assistant's tool-call turn
-            conversation_context.append({
-                "role": "assistant",
-                "content": response.get("content") or "",
-                "tool_calls": tool_calls
-            })
-
-            # Execute each tool call and feed the result back
-            for tc in tool_calls:
-                func_name = tc.get("function", {}).get("name", "")
-                func_args_str = tc.get("function", {}).get("arguments", "{}")
-                tool_call_id = tc.get("id", "")
-
-                try:
-                    func_args = json.loads(func_args_str) if func_args_str else {}
-                except json.JSONDecodeError as e:
-                    logger.error(f"[Tool] Failed to parse tool arguments for '{func_name}': {e}")
-                    func_args = {}
-
-                # Side-effect tools (search, image, reminder, poll, event)
-                # must not run twice with identical arguments in one reply —
-                # a repeat means the model ignored the earlier result, so
-                # point it back at that instead of re-posting to Discord.
-                call_key = ((func_name, json.dumps(func_args, sort_keys=True))
-                            if is_no_repeat_tool(func_name) else None)
-                if call_key and call_key in executed_calls:
-                    logger.warning(f"[Tool] Skipping duplicate '{func_name}' call with identical arguments")
-                    tool_result = (f"Duplicate call skipped: '{func_name}' already ran with these exact "
-                                   f"arguments during this reply. Use its earlier result above to answer "
-                                   f"the user now — do not call it again.")
-                else:
-                    tool_result = await execute_tool(func_name, func_args, tool_context)
-                    # Record only successful runs so a transient failure can
-                    # still be retried within the same reply
-                    if call_key and not tool_result.startswith("Error"):
-                        executed_calls.add(call_key)
-
-                conversation_context.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_result
-                })
-
-        # Iteration budget exhausted — force a text answer (no tools offered)
-        logger.warning(f"[Tool] Iteration budget ({max_iterations}) exhausted; forcing text response")
-        response = await client.send_message_with_history(
-            messages=conversation_context,
-            model=model_name,
-            system_prompt=system_prompt
-        )
-        if isinstance(response, dict):
-            return response.get("content") or ""
-        return response
 
     # ─── Message listener ───────────────────────────────────────────────────
 
@@ -847,118 +747,26 @@ class MentionCommands(commands.Cog):
 
         logger.info(f"[Mention] Detected mention from {message.author.id} in channel {channel_id}")
 
-        # Determine which provider and model to use for this channel
-        provider, model_name = self.state.resolve_model(channel_id)
-        client_to_use = self.clients.get(provider)
-        logger.info(f"[Mention] Provider='{provider}', Model='{model_name}'. Client available: {client_to_use is not None}")
-
         try:
-            # Get the message content without the mention
-            content = self._strip_mentions(message.content) or "Hello!"
-
-            tool_calling_enabled = self.state.get_tool_calling_enabled()
-
-            # Process images if any are attached
-            images = []
-            if client_to_use and hasattr(client_to_use, 'model_supports_vision') and message.attachments:
-                if asyncio.iscoroutinefunction(client_to_use.model_supports_vision):
-                    client_supports_vision = await client_to_use.model_supports_vision(model_name)
-                else:
-                    client_supports_vision = client_to_use.model_supports_vision(model_name)
-                logger.info(f"[Mention] Client '{provider}' model '{model_name}' vision support: {client_supports_vision}")
-
-                if client_supports_vision:
-                    for attachment in message.attachments:
-                        if any(attachment.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                            try:
-                                image_data = await attachment.read()
-                                images.append({
-                                    'data': image_data,
-                                    'type': attachment.content_type or 'image/jpeg'
-                                })
-                            except Exception as e:
-                                await message.channel.send(f"⚠️ Failed to process image {attachment.filename}: {str(e)}")
-
-            # Channel context up to and including this mention. Anchoring
-            # matters: without it, messages from other users that arrive while
-            # this reply is in flight end up after the mention, and the model
-            # answers them instead of the person who summoned it.
-            conversation_context = self._history_for(message, channel_id)
-
-            # Get effective system prompt (persona > channel config > global),
-            # with memory summaries relevant to the current message and this
-            # channel's notes on the speaker and other participants appended
-            channel_system_prompt = self.state.get_effective_system_prompt(
-                channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
-
-            # Mentions are recorded above, so history already ends with this
-            # turn, labelled with the speaker's name by the client. Only
-            # append it here if that write failed, so the model still sees it.
-            if not recorded:
-                conversation_context.append({
-                    "role": "user",
-                    "name": message.author.display_name,
-                    "content": content
-                })
-
-            async with message.channel.typing():
-                if not client_to_use or not hasattr(client_to_use, 'send_message_with_history'):
-                    if client_to_use:
-                        logger.error(f"[Mention] Client for provider '{provider}' does not support chat.")
-                        response = f"⚠️ Error: Client for provider '{provider}' does not support chat ('send_message_with_history' missing)."
-                    else:
-                        logger.error(f"[Mention] Client for provider '{provider}' not available.")
-                        response = f"⚠️ Error: Client for provider '{provider}' not available or not initialized."
-                elif tool_calling_enabled:
-                    # Tool-calling path: the model decides whether to call
-                    # tools; results are fed back until it produces text.
-                    tool_context = {
-                        "bot": self.bot,
-                        "state": self.state,
-                        "message": message,
-                        "channel_id": channel_id,
-                        "clients": self.clients,
-                        "cog": self  # For side-effect handlers (reminder, image, search)
-                    }
-                    response = await self._run_tool_loop(
-                        client_to_use, conversation_context, model_name,
-                        channel_system_prompt, images, tool_context
-                    )
-                else:
-                    # Plain conversation path (tool calling disabled)
-                    response = await client_to_use.send_message_with_history(
-                        messages=conversation_context,
-                        model=model_name,
-                        system_prompt=channel_system_prompt,
-                        images=images
-                    )
-                    if isinstance(response, dict):
-                        response = response.get("content") or ""
-
-            if response is None:
-                logger.error("[Mention] No response produced for mention.")
-                await message.channel.send("⚠️ An unexpected response format was received.")
-            elif isinstance(response, str) and response.startswith("⚠️"):
-                # Error string — don't split into chunks, don't add to history
-                await message.channel.send(response)
-            elif isinstance(response, str):
-                # Add assistant's response to history
-                await self.state.add_to_channel_history(channel_id, {
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": datetime.now()
-                })
-
-                # Send in Discord-sized chunks via persona webhook if configured
-                await self._send_reply(message, channel_id, response, conversation_context)
-            else:
-                logger.error(f"[Mention] Unexpected response type: {type(response)}")
-                await message.channel.send("⚠️ An unexpected response format was received.")
-
+            # Mentions are recorded in on_message, so history already ends
+            # with this turn. Anchoring matters: without it, messages from
+            # other users that arrive while this reply is in flight end up
+            # after the mention, and the model answers them instead of the
+            # person who summoned it.
+            await self.service.respond(ReplyRequest(
+                conversation=self._conversation(message, channel_id),
+                author=message.author,
+                content=self._strip_mentions(message.content) or "Hello!",
+                message=message,
+                attachments=list(message.attachments or []),
+                history_until=self._history_anchors.get(message.id),
+                recorded=recorded,
+                feature="mention",
+            ))
         except Exception as e:
             logger.exception(f"[Mention] Error processing mention in channel {channel_id}: {e}")
             try:
-                await message.channel.send(f"⚠️ An unexpected error occurred while processing your mention: {str(e)}")
+                await message.channel.send("⚠️ Something went wrong while I was answering. Please try again.")
             except Exception as followup_e:
                 logger.error(f"[Mention] Failed to send error message to channel {channel_id}: {followup_e}")
 

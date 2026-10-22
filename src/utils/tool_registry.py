@@ -207,7 +207,8 @@ async def _web_search(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     query = args.get("query", "")
     # Returns the actual search results (or why the search didn't run) for
     # the model to weave into its reply; nothing is posted to the channel.
-    return await cog.handle_search_request(ctx["message"], ctx["channel_id"], query)
+    return await cog.handle_search_request(ctx["message"], ctx["channel_id"], query,
+                                           history=ctx.get("history"))
 
 
 @tool({

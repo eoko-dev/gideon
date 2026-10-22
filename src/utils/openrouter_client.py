@@ -8,12 +8,39 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List, Dict, Any, Optional
 
+from . import llm_result
 from .llm_formatting import prepare_llm_messages
+from .llm_result import ChatResult
+from .usage import record_usage
 
 logger = logging.getLogger('openrouter_client')
 
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Seconds from a Retry-After header (numeric form only)."""
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None
+
+
+def _normalize_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
+    """Keeps the usage fields Gideon records: token counts, cost, cached tokens."""
+    if not isinstance(usage, dict) or not usage:
+        return {}
+    details = usage.get("prompt_tokens_details") or {}
+    return {
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "cached_tokens": int(details.get("cached_tokens") or 0),
+        "cost": float(usage.get("cost") or 0.0),
+    }
+
+
 class OpenRouterClient:
     """Client for interacting with the OpenRouter API."""
+
+    # chat() returns a ChatResult; see llm_result.call_chat
+    supports_chat_result = True
     
     def __init__(self, api_key: str, system_prompt: str, default_model: str):
         self.api_key = api_key
@@ -118,38 +145,56 @@ class OpenRouterClient:
             return False
             
     async def send_message_with_history(
-        self, 
+        self,
         messages: List[Dict[str, str]],
         images: List[Dict[str, Any]] = None,
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
         web_search: bool = False,
-        response_format: Optional[Dict[str, Any]] = None, # Add response_format parameter
+        response_format: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None
-    ) -> str:
-        """Send a message with conversation history to the AI model."""
-        # Use provided system prompt or fall back to default
+    ):
+        """Legacy interface: returns text, a tool-call dict, or a "⚠️ ..." error string.
+
+        New code should call ``chat()`` and use the ChatResult directly.
+        """
+        result = await self.chat(
+            messages=messages, images=images, system_prompt=system_prompt, model=model,
+            web_search=web_search, response_format=response_format, tools=tools,
+            tool_choice=tool_choice)
+        return result.to_legacy()
+
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        images: List[Dict[str, Any]] = None,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        web_search: bool = False,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        max_attempts: int = 3,
+    ) -> ChatResult:
+        """Sends a conversation to the model and returns a ChatResult.
+
+        Rate limits, timeouts, network failures and 5xx responses are retried
+        with jittered backoff. Errors come back as ChatResult.failure with a
+        user-facing message; raw provider output is only logged.
+        """
         prompt_to_use = system_prompt if system_prompt is not None else self.system_prompt
-        
-        # Use provided model or fall back to the default
         model_to_use = model if model is not None else self.model
-        
-        # Add logging
-        logger.info(f"Using model: {model_to_use}")
-        logger.info(f"System prompt length: {len(prompt_to_use)}")
-        logger.info(f"Web search enabled: {web_search}")
-        
-        # Prepare the full conversation context with system prompt
+        api_model_name = self._normalize_model_id(model_to_use)
+
+        logger.debug(f"Using model: {api_model_name}; system prompt length: {len(prompt_to_use or '')}")
+
         conversation = [{"role": "system", "content": prompt_to_use}]
-        
-        # Add the message history, labelling each user turn with its speaker
-        # and dropping bookkeeping keys the API doesn't accept
+        # Label each user turn with its speaker and drop bookkeeping keys
         conversation.extend(prepare_llm_messages(messages))
-        
-        # If we have images and the model supports them, attach to the last
-        # user message using the OpenAI-style content array — OpenRouter
-        # normalizes this for every underlying provider (including Claude).
+
+        # Attach images to the last user message using the OpenAI-style
+        # content array — OpenRouter normalizes this for every provider.
         if images and await self.model_supports_vision(model_to_use):
             for i in range(len(conversation) - 1, -1, -1):
                 if conversation[i]["role"] == "user":
@@ -158,106 +203,105 @@ class OpenRouterClient:
                         base64_image = base64.b64encode(img['data']).decode('utf-8')
                         content_array.append({
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{img['type']};base64,{base64_image}"
-                            }
+                            "image_url": {"url": f"data:{img['type']};base64,{base64_image}"}
                         })
                     conversation[i]["content"] = content_array
                     break
-                    
-        # Prepare the request body
-        # Strip the "openrouter/" prefix if present, as the API expects the base model ID
-        api_model_name = model_to_use
-        if api_model_name.startswith("openrouter/"):
-            api_model_name = api_model_name.split("/", 1)[1]
-            logger.info(f"Using OpenRouter API model name: {api_model_name}")
 
         payload = {
-            "model": api_model_name, # Use the potentially stripped name
-            "messages": conversation
+            "model": api_model_name,
+            "messages": conversation,
+            # Ask OpenRouter to include token counts and cost in the response
+            "usage": {"include": True},
         }
-
-        # Add web search parameter if enabled using the 'plugins' field
         if web_search:
             payload["plugins"] = [{"id": "web"}]
-
-        # Add response_format to the payload if provided
         if response_format:
             payload["response_format"] = response_format
-            logger.info(f"Using response_format: {response_format.get('type')}") # Log the type being used
-
-        # Add tools to the payload if provided (native function/tool calling)
         if tools:
             payload["tools"] = tools
-            if tool_choice:
-                payload["tool_choice"] = tool_choice
-            else:
-                payload["tool_choice"] = "auto"
-            logger.info(f"Tool calling enabled with {len(tools)} tool(s)")
+            payload["tool_choice"] = tool_choice or "auto"
 
-        # Send the request
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/eoko-dev/gideon",
+            "X-Title": "Gideon Discord Bot",
+            "X-Client": "openrouter-python"
+        }
+
+        result = ChatResult.failure(llm_result.PROVIDER, api_model_name, provider="openrouter")
+        for attempt in range(max_attempts):
+            result, retry_after = await self._post_chat(payload, headers, api_model_name)
+            if result.ok or result.error_kind not in llm_result.RETRYABLE_KINDS:
+                break
+            if attempt + 1 < max_attempts:
+                delay = llm_result.backoff_delay(attempt, retry_after)
+                logger.warning(f"[OpenRouter] {result.error_kind} on attempt {attempt + 1}/{max_attempts}; "
+                               f"retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
+
+        if not result.ok:
+            logger.error(f"[OpenRouter] Chat failed ({result.error_kind}) for model {api_model_name}: "
+                         f"{(result.detail or '')[:500]}")
+        record_usage(result)
+        return result
+
+    async def _post_chat(self, payload: Dict[str, Any], headers: Dict[str, str],
+                         model: str):
+        """One chat completion request. Returns (ChatResult, retry_after_seconds)."""
         try:
             session = self._get_session()
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/eoko-dev/gideon",
-                "X-Title": "Gideon Discord Bot",
-                "X-Client": "openrouter-python"
-            }
-            async with session.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload
-            ) as response:
+            async with session.post(f"{self.base_url}/chat/completions",
+                                    headers=headers, json=payload) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    logger.error(f"API Error ({response.status}): {error_text}")
-                    return f"⚠️ API Error ({response.status}): {error_text}"
-                    
-                result = await response.json()
-                logger.info(f"Response keys: {result.keys()}")
-                    
-                try:
-                    if "choices" in result and len(result["choices"]) > 0:
-                        choice = result["choices"][0]
-                        if "message" in choice:
-                            message = choice["message"]
-                            # Check for tool calls first
-                            if message.get("tool_calls"):
-                                logger.info(f"Model requested {len(message['tool_calls'])} tool call(s)")
-                                return {
-                                    "content": message.get("content"),
-                                    "tool_calls": message["tool_calls"]
-                                }
-                            elif "content" in message:
-                                return message["content"]
-                            else:
-                                logger.error(f"Unexpected choice format: {choice}")
-                                return "⚠️ Choice missing message or content field"
-                        else:
-                            logger.error(f"Unexpected choice format: {choice}")
-                            return "⚠️ Choice missing message or content field"
-                    elif "error" in result:
-                        error_msg = result.get("error", {}).get("message", "Unknown error")
-                        error_type = result.get("error", {}).get("type", "")
-                            
-                        logger.error(f"API returned error: {error_msg}, type: {error_type}")
-                            
-                        # Handle rate limit errors with more user-friendly message
-                        if "rate limit" in error_msg.lower() or "ratelimit" in error_msg.lower():
-                            return f"⚠️ Rate limit exceeded for model `{self.model}`.\nPlease try:\n- Waiting a few minutes\n- Selecting a different model with `/setmodel`\n- Using a paid plan on OpenRouter"
-                            
-                        return f"⚠️ API Error: {error_msg}"
-                    else:
-                        logger.error(f"Unexpected API response format: {result}")
-                        return "⚠️ Unexpected API response format. Try using `/setmodel` to switch to a different model."
-                except Exception as e:
-                    logger.error(f"Error parsing API response: {str(e)}")
-                    return f"⚠️ Error parsing response: {str(e)}"
+                    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                    kind = llm_result.kind_for_status(response.status, error_text)
+                    return ChatResult.failure(kind, model, detail=f"{response.status}: {error_text}",
+                                              provider="openrouter"), retry_after
+                data = await response.json(content_type=None)
+        except asyncio.TimeoutError as e:
+            return ChatResult.failure(llm_result.TIMEOUT, model, detail=repr(e), provider="openrouter"), None
+        except aiohttp.ClientError as e:
+            return ChatResult.failure(llm_result.NETWORK, model, detail=repr(e), provider="openrouter"), None
         except Exception as e:
-            logger.error(f"Error sending message: {str(e)}")
-            return f"⚠️ Error: {str(e)}"
+            logger.exception(f"[OpenRouter] Unexpected error sending chat request: {e}")
+            return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(e), provider="openrouter"), None
+
+        return self._parse_chat_response(data, model), None
+
+    @staticmethod
+    def _parse_chat_response(data: Any, model: str) -> ChatResult:
+        """Turns a /chat/completions JSON body into a ChatResult."""
+        if not isinstance(data, dict):
+            return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(data)[:500],
+                                      provider="openrouter")
+        usage = data.get("usage") or {}
+        if data.get("error"):
+            error = data["error"] if isinstance(data["error"], dict) else {"message": str(data["error"])}
+            code = error.get("code")
+            status = code if isinstance(code, int) else 500
+            kind = llm_result.kind_for_status(status, str(error.get("message", "")))
+            return ChatResult.failure(kind, model, detail=json.dumps(error)[:500], provider="openrouter")
+
+        choices = data.get("choices") or []
+        if not choices or not isinstance(choices[0], dict) or "message" not in choices[0]:
+            return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=json.dumps(data)[:500],
+                                      provider="openrouter")
+        choice = choices[0]
+        message = choice["message"] or {}
+        # A choice can carry its own mid-stream provider error
+        if choice.get("error"):
+            return ChatResult.failure(llm_result.PROVIDER, model, detail=json.dumps(choice["error"])[:500],
+                                      provider="openrouter")
+        return ChatResult(
+            content=message.get("content"),
+            tool_calls=message.get("tool_calls") or None,
+            usage=_normalize_usage(usage),
+            model=data.get("model") or model,
+            provider="openrouter",
+        )
 
     async def get_available_models(self) -> Dict[str, Any]:
         """Fetch available models from OpenRouter API."""

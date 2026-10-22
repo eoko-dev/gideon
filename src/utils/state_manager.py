@@ -558,37 +558,43 @@ class BotStateManager:
             creator_id=str(creator_id) if creator_id else None,
         )
 
-    async def add_discord_thread_message(self, thread_id: str, message: Dict[str, Any]):
-        """Adds a message associated with a thread to the database."""
+    async def add_discord_thread_message(self, thread_id: str, message: Dict[str, Any]) -> Optional[datetime]:
+        """Adds a message associated with a thread to the database.
+
+        Returns the timestamp the row was stored with, or None if it was skipped.
+        """
         role = message.get("role")
         content = message.get("content")
-        user_id = message.get("user_id")
-        user_name = message.get("name")
         timestamp = datetime.now()
 
         if not role or not content:
              logger.error(f"Thread message missing role or content: {message}")
-             return
+             return None
 
-        # Database call is synchronous
-        self.db_manager.add_message(
+        # The DB call is synchronous — run it off the event loop
+        await asyncio.to_thread(
+            self.db_manager.add_message,
             role=role,
             content=content,
             timestamp=timestamp,
             thread_id=str(thread_id),
-            user_id=user_id,
-            user_name=user_name,
+            user_id=message.get("user_id"),
+            user_name=message.get("name"),
             is_bot=bool(message.get("is_bot"))
         )
+        return timestamp
 
     def get_discord_thread_history(self, thread_id: str, limit: Optional[int] = None,
-                                   hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Gets message history for a Discord thread from the database."""
-        # Use configured history limit? Or a different limit for threads?
-        # Let's use max_channel_history for now, can be adjusted.
+                                   hours_limit: Optional[int] = None,
+                                   until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Gets message history for a Discord thread from the database.
+
+        Pass ``until`` (the timestamp returned by add_discord_thread_message) to
+        exclude messages recorded after the one being answered.
+        """
         effective_limit = limit if limit is not None else self.max_channel_history
         return self.db_manager.get_thread_history(str(thread_id), limit=effective_limit,
-                                                  hours_limit=hours_limit)
+                                                  hours_limit=hours_limit, until=until)
 
     def get_discord_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Gets thread data by Discord thread ID from the database."""

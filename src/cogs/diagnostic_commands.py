@@ -18,7 +18,7 @@ class DiagnosticCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.state = BotStateManager()
-        self.openrouter_client = OpenRouterClient(OPENROUTER_API_KEY, SYSTEM_PROMPT, DEFAULT_MODEL)
+        self.openrouter_client = bot.openrouter_client
     
     @discord.slash_command(
         name="diagnostic",

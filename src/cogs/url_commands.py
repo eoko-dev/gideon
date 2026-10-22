@@ -5,10 +5,10 @@ from discord.ext import commands
 import aiohttp
 from bs4 import BeautifulSoup
 import logging
-from ..utils.state_manager import BotStateManager
-from ..utils.openrouter_client import OpenRouterClient
+from ..utils.conversation_service import Conversation
+from ..utils.llm_result import call_chat
 from ..utils.safe_fetch import UnsafeURLError, create_safe_session, fetch_text, validate_url
-from ..config import OPENROUTER_API_KEY, SYSTEM_PROMPT, DEFAULT_MODEL
+from ..utils.usage import usage_scope
 
 # Set up logging
 logger = logging.getLogger('url_commands')
@@ -32,8 +32,6 @@ class URLCommands(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.state = BotStateManager()
-        self.openrouter_client = OpenRouterClient(OPENROUTER_API_KEY, SYSTEM_PROMPT, DEFAULT_MODEL)
         self._fetch_session = None
     
     @discord.slash_command(
@@ -47,7 +45,10 @@ class URLCommands(commands.Cog):
         await ctx.defer()
         
         channel_id = str(ctx.channel.id)
-        model_to_use = self.state.get_effective_model(channel_id)
+        scope_id = str(ctx.channel.parent_id) if isinstance(ctx.channel, discord.Thread) else channel_id
+        provider, model_name, client = self.bot.conversation_service.resolve(
+            Conversation(channel=ctx.channel, channel_id=scope_id))
+        model_to_use = f"{provider}/{model_name}"
 
         try:
             url = validate_url(url)
@@ -87,11 +88,17 @@ class URLCommands(commands.Cog):
                 summary_prompt = f"Please provide a concise summary (5-7 bullet points, maximum 2000 characters) of this web page content:\n\nTitle: {title}\n\nContent: {text}"
             
             # Send to AI
-            response = await self.openrouter_client.send_message_with_history(
-                [{"role": "user", "content": summary_prompt}],
-                system_prompt=SUMMARY_SYSTEM_PROMPT,
-                model=model_to_use,
-            )
+            with usage_scope("summarize_url", user_id=ctx.author.id, channel_id=scope_id):
+                result = await call_chat(
+                    client,
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    system_prompt=SUMMARY_SYSTEM_PROMPT,
+                    model=model_name,
+                )
+            if not result.ok:
+                await ctx.edit(content=f"⚠️ {result.error}")
+                return
+            response = result.text
             
             # Handle response that might be too long for Discord embeds
             # Discord embed descriptions are limited to 4096 characters

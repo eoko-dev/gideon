@@ -21,6 +21,7 @@ from .config import (
 )
 from .utils.state_manager import BotStateManager
 from .utils.webhook_sender import WebhookSender
+from .utils.conversation_service import ConversationService
 from .utils.reminder_service import deliver_due_reminders
 from .utils.memory_service import archive_and_prune, llm_clients
 from .utils.openrouter_client import OpenRouterClient
@@ -112,6 +113,7 @@ async def _setup_state() -> BotStateManager:
     logger.info(f"State manager initialized. Global model: {state.get_global_model()}")
 
     bot.webhook_sender = WebhookSender(bot)
+    bot.conversation_service = ConversationService(bot)
 
     # Seed built-in persona templates
     from .utils.persona_templates import BUILTIN_TEMPLATES
