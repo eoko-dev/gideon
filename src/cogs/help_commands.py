@@ -2,7 +2,7 @@
 import discord
 import logging
 from discord.ext import commands
-from typing import Dict, List, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 

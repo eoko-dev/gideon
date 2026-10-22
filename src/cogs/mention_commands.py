@@ -1,6 +1,5 @@
 """Functionality for responding to @mentions in messages."""
 import discord
-import asyncio
 import logging
 import io
 import json
@@ -14,7 +13,7 @@ from ..utils.llm_result import call_chat
 from ..utils.tool_registry import untrusted_block
 from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..utils.llm_formatting import describe_message, resolve_discord_mentions
+from ..utils.llm_formatting import describe_message
 from ..config import DEFAULT_MODEL
 
 logger = logging.getLogger('mention_commands')

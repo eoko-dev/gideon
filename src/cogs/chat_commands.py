@@ -1,23 +1,16 @@
 """Core chat commands for the AI assistant."""
 import discord
-import asyncio
 import re  # Add this import here
 import logging
 from discord.ext import commands
-from ..utils.state_manager import BotStateManager
 from ..utils.conversation_service import Conversation, ConversationService, MessageLike, ReplyRequest
 from ..utils.llm_result import call_chat
 from ..utils.memory_service import llm_clients
 from ..utils.usage import usage_scope
-from ..utils.discord_fmt import chunk_message
 from ..utils.permissions import has_channel_permission
-from ..utils.llm_formatting import collect_mention_targets, apply_outbound_mentions
 # Changed to absolute import: from ..utils.conversation import get_channel_context
 # Removed import for conversation, now handled by state_manager
-from ..utils.openrouter_client import OpenRouterClient
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..config import OPENROUTER_API_KEY, SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
-from datetime import datetime
 
 # Set up logging
 logger = logging.getLogger('chat_commands')
@@ -142,7 +135,6 @@ class ChatCommands(commands.Cog):
         Returns:
             bool: True if the response should be formatted for citations
         """
-        import re
 
         # Explicitly check for Sonar first
         if "sonar" in str(model_name).lower() or "perplexity" in str(model_name).lower():

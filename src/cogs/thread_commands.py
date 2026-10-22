@@ -6,9 +6,6 @@ from ..utils.discord_fmt import chunk_message
 from ..utils.permissions import can_manage_ai_thread
 from ..utils.conversation_service import Conversation, ConversationService, MessageLike, ReplyRequest
 from ..utils.llm_formatting import describe_message
-from ..config import SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
 
 # Create logger
 logger = logging.getLogger(__name__)

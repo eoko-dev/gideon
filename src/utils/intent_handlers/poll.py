@@ -1,7 +1,6 @@
 """Handler for poll creation intent."""
 
 import logging
-from datetime import datetime
 import discord
 
 from ..permissions import has_channel_permission
