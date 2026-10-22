@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import discord
 
-from . import llm_result
+from . import budget, llm_result
 from .discord_fmt import chunk_message
 from .llm_formatting import apply_outbound_mentions, collect_mention_targets
 from .llm_result import ChatResult, call_chat
@@ -156,6 +156,12 @@ class ConversationService:
         except Exception as e:
             logger.error(f"[Conversation] Could not load thread config {conversation.thread_id}: {e}")
             return {}
+
+    def _budget_error(self, author) -> Optional[str]:
+        """Today's spend limit message for this author, or None."""
+        if not hasattr(self.state, "get_daily_user_cost_budget"):
+            return None
+        return budget.chat_budget_error(self.state, author, self.bot)
 
     # ─── History ────────────────────────────────────────────────────────────
 
@@ -346,6 +352,11 @@ class ConversationService:
                 result = ChatResult.failure(llm_result.UNAVAILABLE, model_name)
                 await self.send_error(conversation, result)
                 return result
+
+            limit_error = self._budget_error(request.author)
+            if limit_error:
+                await conversation.channel.send(f"⛔ {limit_error}")
+                return ChatResult.failure(llm_result.BUDGET, model_name)
 
             history = self.history(conversation, until=request.history_until)
             system_prompt = self.system_prompt(conversation, request.content, speaker_id, history)

@@ -22,6 +22,8 @@ from .config import (
 from .utils.state_manager import BotStateManager
 from .utils.webhook_sender import WebhookSender
 from .utils.conversation_service import ConversationService
+from .utils.budget import make_usage_sink
+from .utils.usage import set_usage_sink
 from .utils.reminder_service import deliver_due_reminders
 from .utils.memory_service import archive_and_prune, llm_clients
 from .utils.openrouter_client import OpenRouterClient
@@ -114,6 +116,7 @@ async def _setup_state() -> BotStateManager:
 
     bot.webhook_sender = WebhookSender(bot)
     bot.conversation_service = ConversationService(bot)
+    set_usage_sink(make_usage_sink(state))
 
     # Seed built-in persona templates
     from .utils.persona_templates import BUILTIN_TEMPLATES

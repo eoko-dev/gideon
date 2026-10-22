@@ -93,17 +93,6 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any],
         return f"Error executing tool '{tool_name}': {e}"
 
 
-def _resolve_chat_client(ctx: Dict[str, Any]):
-    """Returns (client, model_name) for the channel's effective model."""
-    state = ctx["state"]
-    channel_id = ctx["channel_id"]
-    provider, model_name = state.resolve_model(channel_id)
-    client = ctx.get("clients", {}).get(provider)
-    if client is None or not hasattr(client, "send_message_with_history"):
-        raise ValueError(f"Chat client for provider '{provider}' is not available.")
-    return client, model_name
-
-
 # ─── Side-effect tools (post their own Discord output) ──────────────────────
 
 @tool({
@@ -374,102 +363,6 @@ async def _convert_timezone(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         args.get("source_timezone", ""),
         args.get("target_timezone", "")
     )
-
-
-@tool({
-    "name": "convert_units",
-    "description": "Convert between units (distance, temperature, currency, etc.). Use when the user wants to convert a value from one unit to another.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "value": {
-                "type": "number",
-                "description": "The numeric value to convert"
-            },
-            "source_unit": {
-                "type": "string",
-                "description": "Source unit (e.g., 'miles', 'F', 'USD')"
-            },
-            "target_unit": {
-                "type": "string",
-                "description": "Target unit (e.g., 'km', 'celsius', 'EUR')"
-            },
-            "category": {
-                "type": "string",
-                "description": "Unit category hint: 'distance', 'temperature', 'currency', etc."
-            }
-        },
-        "required": ["value", "source_unit", "target_unit"]
-    }
-})
-async def _convert_units(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
-    from .intent_handlers.unit_conversion import convert_units
-    client, model_name = _resolve_chat_client(ctx)
-    return await convert_units(
-        client, model_name,
-        args.get("value", ""),
-        args.get("source_unit", ""),
-        args.get("target_unit", ""),
-        args.get("category", "")
-    )
-
-
-@tool({
-    "name": "translate",
-    "description": "Translate text between languages. Use when the user wants to translate specific text.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "The text to translate"
-            },
-            "source_language": {
-                "type": "string",
-                "description": "Source language (empty string if unknown, for auto-detection)"
-            },
-            "target_language": {
-                "type": "string",
-                "description": "Target language to translate to"
-            }
-        },
-        "required": ["text", "target_language"]
-    }
-})
-async def _translate(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
-    from .intent_handlers.translation import translate_text
-    client, model_name = _resolve_chat_client(ctx)
-    return await translate_text(
-        client, model_name,
-        args.get("text", ""),
-        args.get("source_language", ""),
-        args.get("target_language", "")
-    )
-
-
-@tool({
-    "name": "define",
-    "description": "Look up a factual definition or explanation of a term. Use for timeless knowledge, general concepts, people, etc.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "term": {
-                "type": "string",
-                "description": "The term or concept to define"
-            },
-            "depth": {
-                "type": "string",
-                "enum": ["brief", "detailed"],
-                "description": "How detailed the definition should be"
-            }
-        },
-        "required": ["term"]
-    }
-})
-async def _define(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
-    from .intent_handlers.definition import define_term
-    client, model_name = _resolve_chat_client(ctx)
-    return await define_term(client, model_name, args.get("term", ""), args.get("depth", "brief"))
 
 
 # ─── Per-user memory (scoped to the requesting user in this channel) ────────

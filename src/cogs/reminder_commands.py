@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 import json
 import os
+from ..utils.memory_service import llm_clients
+from ..utils.usage import usage_scope
 from ..utils.timeutil import local_tz, now_local, to_epoch
 
 logger = logging.getLogger('reminder_commands')
@@ -77,17 +79,9 @@ Return ONLY the JSON, no other text."""
 
         logger.info(f"System prompt length: {len(system_prompt)}")
 
-        # Get the effective model for this channel
-        model_id_full = self.state.get_effective_model(channel_id)
-
-        try:
-            provider, model_name = model_id_full.split('/', 1)
-        except ValueError:
-            logger.warning(f"Invalid model format '{model_id_full}'. Defaulting to OpenRouter.")
-            provider = self.state.global_provider
-            model_name = model_id_full
-
-        client_to_use = self.clients.get(provider)
+        # Time parsing is background work: the utility model, else the channel's
+        provider, model_name = self.state.resolve_utility_model(channel_id)
+        client_to_use = llm_clients(self.bot).get(provider)
 
         if not client_to_use:
             logger.error(f"Client for provider '{provider}' not available for time parsing")
@@ -102,12 +96,13 @@ Return ONLY the JSON, no other text."""
             # Call AI with response_format for structured output (if supported)
             response_format = {"type": "json_object"}
 
-            response = await client_to_use.send_message_with_history(
-                messages=messages,
-                model=model_name,
-                system_prompt=system_prompt,
-                response_format=response_format
-            )
+            with usage_scope("reminder_parse"):
+                response = await client_to_use.send_message_with_history(
+                    messages=messages,
+                    model=model_name,
+                    system_prompt=system_prompt,
+                    response_format=response_format
+                )
 
             # Parse the JSON response
             logger.info(f"AI time parsing response for '{time_str}': {response}")

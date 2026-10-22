@@ -8,6 +8,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
+from ..utils import budget
 from ..utils.conversation_service import Conversation, ConversationService, ReplyRequest
 from ..utils.llm_result import call_chat
 from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
@@ -281,6 +282,11 @@ class MentionCommands(commands.Cog):
             logger.warning(f"[Tool] Missing image prompt for user {message.author.id}")
             return
 
+        limit_error = budget.generation_limit_error(self.state, message.author, budget.IMAGE, self.bot)
+        if limit_error:
+            await message.channel.send(f"⛔ {limit_error}")
+            return
+
         # Get UnifiedImageCommands cog
         image_cog = self.bot.get_cog('UnifiedImageCommands')
         if not image_cog:
@@ -464,6 +470,8 @@ class MentionCommands(commands.Cog):
 
         # Handle result
         if result.get("success"):
+            budget.record_generation(self.state, budget.IMAGE, message.author.id, channel_id,
+                                     provider=active_provider)
             # Build embed
             embed = discord.Embed(
                 title="Generated Image",

@@ -1,4 +1,6 @@
 import discord
+
+from ..utils import budget
 from discord.ext import commands
 from discord import option # Use discord.option for type hinting
 import asyncio
@@ -230,6 +232,11 @@ class UnifiedImageCommands(commands.Cog):
     async def dream(self, ctx: discord.ApplicationContext, prompt: str, negative_prompt: Optional[str]):
         await ctx.defer()
 
+        limit_error = budget.generation_limit_error(self.bot.state_manager, ctx.author, budget.IMAGE, self.bot)
+        if limit_error:
+            await ctx.followup.send(f"⛔ {limit_error}", ephemeral=True)
+            return
+
         # 1. Get active provider from DB
         active_provider: ProviderType = self.db.get_global_config(DB_KEY_ACTIVE_PROVIDER, DEFAULT_PROVIDER)
 
@@ -362,6 +369,8 @@ class UnifiedImageCommands(commands.Cog):
 
             # 5. Format and send response
             if result.get("success"):
+                budget.record_generation(self.bot.state_manager, budget.IMAGE, ctx.author.id,
+                                         ctx.channel_id, provider=active_provider)
                 embed = discord.Embed(
                     title="Generated Image",
                     description=f"**Prompt:** {prompt}",

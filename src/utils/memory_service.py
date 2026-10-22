@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 from . import user_memory
+from .usage import usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -329,13 +330,21 @@ async def _store_summary(channel_id: str, history: List[Dict[str, Any]], state,
 
 
 def _resolve_summary_client(channel_id: str, state, clients: dict) -> Optional[Tuple[Any, str]]:
-    """Returns (client, model name) for summarizing in this channel, or None."""
-    model_id = state.get_effective_model(channel_id)
-    try:
-        provider, model_name = model_id.split("/", 1)
-    except ValueError:
-        provider = "openrouter"
-        model_name = model_id
+    """Returns (client, model name) for summarizing in this channel, or None.
+
+    Uses the configured utility model when set (background work doesn't need
+    the channel's chat model), else the channel's own model.
+    """
+    resolver = getattr(state, "resolve_utility_model", None)
+    if resolver is not None:
+        provider, model_name = resolver(channel_id)
+    else:
+        model_id = state.get_effective_model(channel_id)
+        try:
+            provider, model_name = model_id.split("/", 1)
+        except ValueError:
+            provider = "openrouter"
+            model_name = model_id
 
     llm_client = clients.get(provider) or clients.get("openrouter")
     if llm_client is None or not hasattr(llm_client, "send_message_with_history"):
@@ -375,12 +384,13 @@ async def _summarize_history(
     prompt = _SUMMARIZE_PROMPT.format(conversation=conversation_text)
 
     try:
-        response = await llm_client.send_message_with_history(
-            messages=[{"role": "user", "content": prompt}],
-            model=model_name,
-            system_prompt=system_prompt,
-            images=[],
-        )
+        with usage_scope("memory", user_id=None, channel_id=channel_id):
+            response = await llm_client.send_message_with_history(
+                messages=[{"role": "user", "content": prompt}],
+                model=model_name,
+                system_prompt=system_prompt,
+                images=[],
+            )
         if response and not response.startswith("⚠️"):
             return response.strip()
         logger.warning(f"[Memory] Summarization returned error for channel {channel_id}: {response}")
@@ -422,12 +432,13 @@ async def _update_user_notes(channel_id: str, history: List[Dict[str, Any]], sta
         conversation=_format_history_for_notes(history, subjects),
     )
     try:
-        response = await llm_client.send_message_with_history(
-            messages=[{"role": "user", "content": prompt}],
-            model=model_name,
-            system_prompt=_USER_NOTES_SYSTEM,
-            images=[],
-        )
+        with usage_scope("memory", user_id=None, channel_id=channel_id):
+            response = await llm_client.send_message_with_history(
+                messages=[{"role": "user", "content": prompt}],
+                model=model_name,
+                system_prompt=_USER_NOTES_SYSTEM,
+                images=[],
+            )
     except Exception as e:
         logger.error(f"[Memory] User notes extraction failed for channel {channel_id}: {e}", exc_info=True)
         return False

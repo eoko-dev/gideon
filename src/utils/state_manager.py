@@ -46,6 +46,10 @@ CONFIG_KEY_MEMORY_SUMMARY_ENABLED = "memory_summary_enabled"
 CONFIG_KEY_MAX_MEMORY_SUMMARIES = "max_memory_summaries"
 CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
+CONFIG_KEY_UTILITY_MODEL = "utility_model"
+CONFIG_KEY_DAILY_COST_BUDGET = "daily_user_cost_budget"
+CONFIG_KEY_DAILY_IMAGE_LIMIT = "daily_user_image_limit"
+CONFIG_KEY_DAILY_VIDEO_LIMIT = "daily_user_video_limit"
 
 class BotStateManager:
     """Singleton class to manage shared state via DatabaseManager."""
@@ -90,6 +94,15 @@ class BotStateManager:
         self.memory_summary_enabled = await self._load_or_set_config(CONFIG_KEY_MEMORY_SUMMARY_ENABLED, True, 'bool')
         self.max_memory_summaries = await self._load_or_set_config(CONFIG_KEY_MAX_MEMORY_SUMMARIES, 10, 'int')
         self.user_memory_enabled = await self._load_or_set_config(CONFIG_KEY_USER_MEMORY_ENABLED, True, 'bool')
+
+        # Cheap model for background work (summaries, notes, time parsing);
+        # None means "use the channel's own model"
+        self.utility_model = await self._load_or_set_config(CONFIG_KEY_UTILITY_MODEL, None, 'string')
+
+        # Per-user daily limits (0 = unlimited). Admins are exempt.
+        self.daily_user_cost_budget = await self._load_or_set_config(CONFIG_KEY_DAILY_COST_BUDGET, 0.0, 'float')
+        self.daily_user_image_limit = await self._load_or_set_config(CONFIG_KEY_DAILY_IMAGE_LIMIT, 25, 'int')
+        self.daily_user_video_limit = await self._load_or_set_config(CONFIG_KEY_DAILY_VIDEO_LIMIT, 3, 'int')
 
         self._initialized = True
         logger.info("BotStateManager initialized successfully.")
@@ -217,6 +230,55 @@ class BotStateManager:
     async def set_user_memory_enabled(self, value: bool):
         self.user_memory_enabled = value
         await self._save_config(CONFIG_KEY_USER_MEMORY_ENABLED, value, 'bool')
+
+    # --- Utility model & usage limits ---
+
+    def get_utility_model(self) -> Optional[str]:
+        """The provider/model used for background work, or None to use the channel's model."""
+        return self.utility_model or None
+
+    async def set_utility_model(self, value: Optional[str]):
+        self.utility_model = (value or "").strip() or None
+        await self._save_config(CONFIG_KEY_UTILITY_MODEL, self.utility_model, 'string')
+
+    def resolve_utility_model(self, channel_id: Optional[str] = None) -> tuple:
+        """(provider, model_name) for background LLM work.
+
+        The configured utility model wins; otherwise the channel's model (or the
+        global model when there is no channel) is used, as before.
+        """
+        utility = self.get_utility_model()
+        if utility and "/" in utility:
+            provider, name = utility.split("/", 1)
+            return provider, name
+        if channel_id is not None:
+            return self.resolve_model(channel_id)
+        model = self.get_global_model()
+        if "/" in model:
+            provider, name = model.split("/", 1)
+            return provider, name
+        return self.global_provider, model
+
+    def get_daily_user_cost_budget(self) -> float:
+        return float(self.daily_user_cost_budget or 0)
+
+    async def set_daily_user_cost_budget(self, value: float):
+        self.daily_user_cost_budget = float(value)
+        await self._save_config(CONFIG_KEY_DAILY_COST_BUDGET, self.daily_user_cost_budget, 'float')
+
+    def get_daily_user_image_limit(self) -> int:
+        return int(self.daily_user_image_limit or 0)
+
+    async def set_daily_user_image_limit(self, value: int):
+        self.daily_user_image_limit = int(value)
+        await self._save_config(CONFIG_KEY_DAILY_IMAGE_LIMIT, self.daily_user_image_limit, 'int')
+
+    def get_daily_user_video_limit(self) -> int:
+        return int(self.daily_user_video_limit or 0)
+
+    async def set_daily_user_video_limit(self, value: int):
+        self.daily_user_video_limit = int(value)
+        await self._save_config(CONFIG_KEY_DAILY_VIDEO_LIMIT, self.daily_user_video_limit, 'int')
 
     def get_effective_session_timeout(self, channel_id: str) -> int:
         """Returns channel override if set, otherwise the global value."""

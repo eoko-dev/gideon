@@ -74,7 +74,11 @@
         memory_summary_enabled: 'setting-memory-summary',
         user_memory_enabled: 'setting-user-memory',
         tool_calling_enabled: 'tool-calling-enabled',
-        tool_calling_max_iterations: 'tool-calling-max-iterations'
+        tool_calling_max_iterations: 'tool-calling-max-iterations',
+        utility_model: 'setting-utility-model',
+        daily_user_cost_budget: 'setting-cost-budget',
+        daily_user_image_limit: 'setting-image-limit',
+        daily_user_video_limit: 'setting-video-limit'
     };
 
     var CHANNEL_FIELD_MAP = {
@@ -223,6 +227,7 @@
         formTrackers.settings = G.trackForm($('#settings-form'), 'AI configuration');
         formTrackers.memory = G.trackForm($('#memory-settings-form'), 'Memory system');
         formTrackers.tools = G.trackForm($('#tool-calling-form'), 'Tool calling');
+        formTrackers.costs = G.trackForm($('#cost-controls-form'), 'Cost controls');
         formTrackers.imageProvider = G.trackForm($('#image-provider-form'), 'Active image provider');
         formTrackers.modalities = G.trackForm($('#modalities-form'), 'OpenRouter modalities');
         formTrackers.video = G.trackForm($('#video-config-form'), 'Video defaults');
@@ -738,6 +743,58 @@
             $$('.stat-value.skeleton-text').forEach(function (el) { el.textContent = '--'; el.classList.remove('skeleton-text'); });
         }
         loadRecentErrors();
+        loadUsage();
+    }
+
+    function formatCost(value) {
+        var n = Number(value) || 0;
+        if (n === 0) return '$0';
+        return n < 0.01 ? '<$0.01' : '$' + n.toFixed(2);
+    }
+
+    function formatCount(value) {
+        return (Number(value) || 0).toLocaleString();
+    }
+
+    async function loadUsage() {
+        var box = $('#usage-body');
+        if (!box) return;
+        var days = $('#usage-days') ? $('#usage-days').value : '7';
+        var data;
+        try {
+            data = await api('GET', '/api/usage?days=' + encodeURIComponent(days));
+        } catch (e) {
+            if (e.status === 401) return;
+            box.innerHTML = '<div class="pad muted">Usage unavailable: ' + escapeHtml(describeError(e)) + '</div>';
+            return;
+        }
+        var t = data.totals || {};
+        if (!t.calls) {
+            box.innerHTML = emptyState('check-circle', 'No usage yet', 'LLM calls, images and videos will appear here.');
+            return;
+        }
+        function table(title, rows, labelFn) {
+            if (!rows || !rows.length) return '';
+            return '<div class="usage-table"><h3 class="small muted">' + escapeHtml(title) + '</h3>' +
+                '<div class="table-wrap"><table class="data-table usage-data"><thead><tr><th>Name</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody>' +
+                rows.slice(0, 8).map(function (r) {
+                    return '<tr><td>' + escapeHtml(labelFn(r)) + '</td><td class="num">' + formatCount(r.calls) +
+                        '</td><td class="num">' + formatCount(r.tokens) + '</td><td class="num">' + formatCost(r.cost) + '</td></tr>';
+                }).join('') + '</tbody></table></div></div>';
+        }
+        box.innerHTML =
+            '<dl class="info-list usage-totals">' +
+            '<div class="info-row"><dt>Cost</dt><dd>' + formatCost(t.cost) + '</dd></div>' +
+            '<div class="info-row"><dt>LLM calls</dt><dd>' + formatCount(t.calls - (t.units || 0)) + '</dd></div>' +
+            '<div class="info-row"><dt>Tokens (in / out)</dt><dd>' + formatCount(t.prompt_tokens) + ' / ' + formatCount(t.completion_tokens) + '</dd></div>' +
+            '<div class="info-row"><dt>Cached prompt tokens</dt><dd>' + formatCount(t.cached_tokens) + '</dd></div>' +
+            '<div class="info-row"><dt>Images &amp; videos</dt><dd>' + formatCount(t.units) + '</dd></div>' +
+            '</dl>' +
+            '<div class="grid-3">' +
+            table('By feature', data.by_feature, function (r) { return r.key || 'other'; }) +
+            table('By model', data.by_model, function (r) { return r.key || 'n/a'; }) +
+            table('By person', data.by_user, function (r) { return r.user_name || r.key || 'background'; }) +
+            '</div>';
     }
 
     function setBotStatus(state, text) {
@@ -830,11 +887,16 @@
         updateToolCallingLabel();
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
 
+        $('#setting-utility-model').value = data.utility_model || '';
+        $('#setting-cost-budget').value = data.daily_user_cost_budget != null ? data.daily_user_cost_budget : 0;
+        $('#setting-image-limit').value = data.daily_user_image_limit != null ? data.daily_user_image_limit : 25;
+        $('#setting-video-limit').value = data.daily_user_video_limit != null ? data.daily_user_video_limit : 3;
+
         G.clearFieldErrors($('#tab-settings'));
         var searchEl = $('#setting-model-search');
         if (searchEl) searchEl.value = '';
         await loadModelsForProvider(provider, 'setting-model', settingsModel, null);
-        snapshot('settings', 'memory', 'tools');
+        snapshot('settings', 'memory', 'tools', 'costs');
     }
 
     function updateToolCallingLabel() {
@@ -946,6 +1008,39 @@
             snapshot('tools');
         } catch (err) {
             handleFormError(form, 'tool-calling-save-status', err, SETTINGS_FIELD_MAP);
+        }
+        setBusy(btn, false);
+    }
+
+    async function saveCostControls(e) {
+        e.preventDefault();
+        var form = e.currentTarget;
+        G.clearFieldErrors(form);
+        var imageLimit = readInt('setting-image-limit');
+        var videoLimit = readInt('setting-video-limit');
+        var budgetEl = $('#setting-cost-budget');
+        var budget = parseFloat(String(budgetEl.value).trim());
+        if (isNaN(budget) || budget < 0) {
+            G.setFieldError(budgetEl, 'Enter an amount of 0 or more');
+        }
+        if (imageLimit === null || videoLimit === null || isNaN(budget) || budget < 0) {
+            showSaveStatus('cost-controls-save-status', 'Fix the highlighted fields', true);
+            return;
+        }
+        var btn = e.submitter;
+        setBusy(btn, true);
+        try {
+            await api('PUT', '/api/settings', {
+                utility_model: $('#setting-utility-model').value.trim() || null,
+                daily_user_cost_budget: budget,
+                daily_user_image_limit: imageLimit,
+                daily_user_video_limit: videoLimit
+            });
+            markOwnWrite();
+            showSaveStatus('cost-controls-save-status', 'Cost controls saved', false);
+            snapshot('costs');
+        } catch (err) {
+            handleFormError(form, 'cost-controls-save-status', err, SETTINGS_FIELD_MAP);
         }
         setBusy(btn, false);
     }
@@ -3455,6 +3550,8 @@
         bindEvent('#settings-form', 'submit', saveSettings);
         bindEvent('#memory-settings-form', 'submit', saveMemorySettings);
         bindEvent('#tool-calling-form', 'submit', saveToolCallingSettings);
+        bindEvent('#cost-controls-form', 'submit', saveCostControls);
+        bindEvent('#usage-days', 'change', loadUsage);
         bindEvent('#tool-calling-enabled', 'change', updateToolCallingLabel);
         bindEvent('#setting-provider', 'change', onProviderChange);
         setupModelSearch('setting-model-search', 'setting-model');

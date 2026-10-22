@@ -198,6 +198,24 @@ class SchemaManager:
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (channel_id, user_id)
         );
+        """,
+        # LLM token/cost usage and generation counts, attributed to the
+        # feature, user and channel that caused them
+        """
+        CREATE TABLE IF NOT EXISTS USAGE (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at DATETIME NOT NULL,
+            feature TEXT NOT NULL,
+            user_id TEXT,
+            channel_id TEXT,
+            provider TEXT,
+            model TEXT,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            cost REAL NOT NULL DEFAULT 0,
+            units INTEGER NOT NULL DEFAULT 0
+        );
         """
     ]
 
@@ -222,7 +240,9 @@ class SchemaManager:
         """CREATE INDEX IF NOT EXISTS idx_persona_templates_builtin ON PERSONA_TEMPLATES (is_builtin);""",
         """CREATE INDEX IF NOT EXISTS idx_channel_memory_channel_id ON CHANNEL_MEMORY (channel_id);""",
         """CREATE INDEX IF NOT EXISTS idx_channel_memory_created_at ON CHANNEL_MEMORY (channel_id, created_at);""",
-        """CREATE INDEX IF NOT EXISTS idx_channel_user_memory_user ON CHANNEL_USER_MEMORY (user_id);"""
+        """CREATE INDEX IF NOT EXISTS idx_channel_user_memory_user ON CHANNEL_USER_MEMORY (user_id);""",
+        """CREATE INDEX IF NOT EXISTS idx_usage_created_at ON USAGE (created_at);""",
+        """CREATE INDEX IF NOT EXISTS idx_usage_user_created ON USAGE (user_id, created_at);"""
     ]
 
     @staticmethod

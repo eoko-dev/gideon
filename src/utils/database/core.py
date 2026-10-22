@@ -18,6 +18,7 @@ from .persona_manager import PersonaManager
 from .backup_manager import BackupManager
 from .memory_manager import MemoryManager
 from .user_memory_manager import UserMemoryManager
+from .usage_manager import UsageManager
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class DatabaseManager:
             self.backup = BackupManager(self._conn, self.db_path)
             self.memory = MemoryManager(self._conn)
             self.user_memory = UserMemoryManager(self._conn)
+            self.usage = UsageManager(self._conn)
 
             # Legacy private aliases (older call sites reference these)
             self._config = self.config

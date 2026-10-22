@@ -41,14 +41,27 @@ def current_scope() -> UsageScope:
     return _current_scope.get()
 
 
+_INHERIT = object()
+
+
+def _field(value, outer):
+    if value is _INHERIT:
+        return outer
+    return str(value) if value is not None else None
+
+
 @contextlib.contextmanager
-def usage_scope(feature: str, user_id=None, channel_id=None):
-    """Attributes LLM calls made inside the block. Unset fields inherit the outer scope."""
+def usage_scope(feature: str, user_id=_INHERIT, channel_id=_INHERIT):
+    """Attributes LLM calls made inside the block.
+
+    Omitted fields inherit the outer scope; pass None to clear one (e.g.
+    background memory work started from a user's message isn't theirs).
+    """
     outer = _current_scope.get()
     token = _current_scope.set(UsageScope(
         feature=feature or outer.feature,
-        user_id=str(user_id) if user_id is not None else outer.user_id,
-        channel_id=str(channel_id) if channel_id is not None else outer.channel_id,
+        user_id=_field(user_id, outer.user_id),
+        channel_id=_field(channel_id, outer.channel_id),
     ))
     try:
         yield

@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 import discord
+
+from ..utils import budget
 from discord import option
 from discord.ext import commands
 
@@ -274,6 +276,11 @@ class VideoCommands(commands.Cog):
     ):
         await ctx.defer()
 
+        limit_error = budget.generation_limit_error(self.bot.state_manager, ctx.author, budget.VIDEO, self.bot)
+        if limit_error:
+            await ctx.followup.send(f"⛔ {limit_error}", ephemeral=True)
+            return
+
         if not self.video_client or not self.video_client.is_configured:
             await ctx.followup.send(
                 "⚠️ Video generation is not configured. An admin must add an OpenRouter API key.",
@@ -338,6 +345,8 @@ class VideoCommands(commands.Cog):
             return
 
         job_id = submit_result["job_id"]
+        budget.record_generation(self.bot.state_manager, budget.VIDEO, ctx.author.id, ctx.channel_id,
+                                 provider="openrouter", model=params.get("model"))
 
         # ── Animated progress bar ──────────────────────────────
         # The bar fills over BAR_FULL_SECS seconds, capped at 95% until done.
