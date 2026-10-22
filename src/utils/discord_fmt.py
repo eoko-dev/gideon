@@ -1,4 +1,5 @@
 """Shared Discord message formatting helpers."""
+import re
 from typing import List
 
 import discord
@@ -9,6 +10,19 @@ import discord
 SAFE_ALLOWED_MENTIONS = discord.AllowedMentions(
     everyone=False, roles=False, users=True, replied_user=True
 )
+
+# For Gideon's own replies where an admin turned on allow_everyone_pings and
+# the person asking may mention everyone themselves. Roles stay blocked.
+EVERYONE_ALLOWED_MENTIONS = discord.AllowedMentions(
+    everyone=True, roles=False, users=True, replied_user=True
+)
+
+_EVERYONE_RE = re.compile(r"@(everyone|here)\b")
+
+
+def mentions_everyone(text: str) -> bool:
+    """True if the text contains an @everyone or @here ping."""
+    return bool(_EVERYONE_RE.search(text or ""))
 
 
 # Room kept in each chunk for closing and re-opening a code fence

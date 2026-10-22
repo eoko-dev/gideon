@@ -98,6 +98,7 @@ class WebhookSender:
         embeds: Optional[List[discord.Embed]] = None,
         files: Optional[List[discord.File]] = None,
         reference: Optional[discord.Message] = None,
+        allowed_mentions: Optional[discord.AllowedMentions] = None,
     ) -> Optional[discord.Message]:
         """
         Sends a response through the persona webhook if active,
@@ -105,12 +106,15 @@ class WebhookSender:
 
         ``reference`` makes a bot-account message a Discord reply (without
         pinging the author). Webhooks can't reply, so persona messages ignore it.
+        ``allowed_mentions`` overrides SAFE_ALLOWED_MENTIONS (e.g. to let an
+        allowed reply ping @everyone).
         """
         state = self.bot.state_manager
         persona = state.get_effective_persona(channel_id)
 
         if not persona:
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
         # Webhooks only work in TextChannels; for threads, use parent channel
         target_channel = channel
@@ -123,19 +127,23 @@ class WebhookSender:
             parent_id = str(channel.parent_id)
             persona = state.get_effective_persona(parent_id)
             if not persona:
-                return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+                return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
             channel_id = parent_id
 
         if not isinstance(target_channel, discord.TextChannel):
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
         webhook = await self.get_or_create_webhook(target_channel, channel_id)
         if not webhook:
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
         try:
             return await self._webhook_send(
-                webhook, content, persona, embeds=embeds, files=files, thread=thread_param
+                webhook, content, persona, embeds=embeds, files=files, thread=thread_param,
+                allowed_mentions=allowed_mentions
             )
         except discord.NotFound:
             # Webhook was deleted - clear cache and retry once
@@ -147,23 +155,27 @@ class WebhookSender:
             if webhook:
                 try:
                     return await self._webhook_send(
-                        webhook, content, persona, embeds=embeds, files=files, thread=thread_param
+                        webhook, content, persona, embeds=embeds, files=files, thread=thread_param,
+                        allowed_mentions=allowed_mentions
                     )
                 except Exception as retry_e:
                     logger.error(f"Webhook retry failed: {retry_e}")
 
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
         except discord.HTTPException as e:
             if e.status == 429:
                 logger.warning(f"Webhook rate limited for channel {channel_id}. Falling back.")
             else:
                 logger.error(f"Webhook send failed for channel {channel_id}: {e}")
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
         except Exception as e:
             logger.error(f"Unexpected webhook error for channel {channel_id}: {e}", exc_info=True)
-            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference)
+            return await self._standard_send(channel, content, embeds=embeds, files=files, reference=reference,
+                                             allowed_mentions=allowed_mentions)
 
     async def _webhook_send(
         self,
@@ -173,13 +185,14 @@ class WebhookSender:
         embeds: Optional[List[discord.Embed]] = None,
         files: Optional[List[discord.File]] = None,
         thread: Optional[discord.Thread] = None,
+        allowed_mentions: Optional[discord.AllowedMentions] = None,
     ) -> discord.Message:
         """Sends a message via webhook with persona identity."""
         kwargs = {
             "content": content,
             "username": persona['display_name'],
             "wait": True,
-            "allowed_mentions": SAFE_ALLOWED_MENTIONS,
+            "allowed_mentions": allowed_mentions or SAFE_ALLOWED_MENTIONS,
         }
         if persona.get('avatar_url'):
             kwargs["avatar_url"] = persona['avatar_url']
@@ -199,9 +212,10 @@ class WebhookSender:
         embeds: Optional[List[discord.Embed]] = None,
         files: Optional[List[discord.File]] = None,
         reference: Optional[discord.Message] = None,
+        allowed_mentions: Optional[discord.AllowedMentions] = None,
     ) -> Optional[discord.Message]:
         """Standard bot account send (no webhook)."""
-        kwargs = {"allowed_mentions": SAFE_ALLOWED_MENTIONS}
+        kwargs = {"allowed_mentions": allowed_mentions or SAFE_ALLOWED_MENTIONS}
         if reference is not None and hasattr(reference, "to_reference"):
             # A deleted original shouldn't make the reply fail
             kwargs["reference"] = reference.to_reference(fail_if_not_exists=False)

@@ -337,11 +337,17 @@ class SchemaManager:
         SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "deliver_dm", "INTEGER DEFAULT 0")
         SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "timezone", "TEXT")
 
+    @staticmethod
+    def _migration_5_allow_everyone_pings(cursor):
+        # NULL = inherit the global allow_everyone_pings setting
+        SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "allow_everyone_pings", "INTEGER")
+
     MIGRATIONS = (
         (1, "_migration_1_baseline"),
         (2, "_migration_2_thread_creator"),
         (3, "_migration_3_respond_to_everyone"),
         (4, "_migration_4_reminder_options"),
+        (5, "_migration_5_allow_everyone_pings"),
     )
 
     @staticmethod

@@ -76,6 +76,7 @@
         tool_calling_enabled: 'tool-calling-enabled',
         tool_calling_max_iterations: 'tool-calling-max-iterations',
         respond_to_everyone: 'setting-respond-everyone',
+        allow_everyone_pings: 'setting-allow-everyone-pings',
         stream_replies: 'setting-stream-replies',
         welcome_enabled: 'setting-welcome-enabled',
         welcome_channel_id: 'setting-welcome-channel',
@@ -95,7 +96,8 @@
         memory_summary_enabled: 'channel-edit-summary',
         max_memory_summaries: 'channel-edit-max-summaries',
         user_memory_enabled: 'channel-edit-user-memory',
-        respond_to_everyone: 'channel-edit-everyone'
+        respond_to_everyone: 'channel-edit-everyone',
+        allow_everyone_pings: 'channel-edit-allow-pings'
     };
 
     var OVERRIDE_LABELS = {
@@ -106,7 +108,8 @@
         memory_summary_enabled: 'Summaries',
         max_memory_summaries: 'Max summaries',
         user_memory_enabled: 'Per-user memory',
-        respond_to_everyone: '@everyone'
+        respond_to_everyone: '@everyone',
+        allow_everyone_pings: 'Pings everyone'
     };
 
     var formTrackers = {};
@@ -896,6 +899,7 @@
         updateToolCallingLabel();
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
         $('#setting-respond-everyone').value = data.respond_to_everyone === false ? 'false' : 'true';
+        $('#setting-allow-everyone-pings').value = data.allow_everyone_pings ? 'true' : 'false';
         $('#setting-stream-replies').value = data.stream_replies === false ? 'false' : 'true';
         $('#setting-welcome-enabled').value = data.welcome_enabled ? 'true' : 'false';
         $('#setting-welcome-channel').value = data.welcome_channel_id || '';
@@ -1022,6 +1026,7 @@
                 tool_calling_enabled: $('#tool-calling-enabled').checked,
                 tool_calling_max_iterations: iterations,
                 respond_to_everyone: $('#setting-respond-everyone').value === 'true',
+                allow_everyone_pings: $('#setting-allow-everyone-pings').value === 'true',
                 stream_replies: $('#setting-stream-replies').value === 'true'
             });
             markOwnWrite();
@@ -1264,6 +1269,15 @@
                         : formatSummaryFlag(g.respond_to_everyone !== false);
                 },
                 global: function () { return formatSummaryFlag(g.respond_to_everyone !== false); }
+            },
+            {
+                key: 'allow_everyone_pings', hint: '#channel-allow-pings-hint',
+                hasValue: function () { return $('#channel-edit-allow-pings').value !== ''; },
+                effective: function (source) {
+                    return source === 'channel' ? formatSummaryFlag($('#channel-edit-allow-pings').value)
+                        : formatSummaryFlag(!!g.allow_everyone_pings);
+                },
+                global: function () { return formatSummaryFlag(!!g.allow_everyone_pings); }
             }
         ];
     }
@@ -1331,6 +1345,7 @@
         $('#channel-edit-max-summaries').value = data.max_memory_summaries != null ? data.max_memory_summaries : '';
         $('#channel-edit-user-memory').value = data.user_memory_enabled == null ? '' : String(!!data.user_memory_enabled);
         $('#channel-edit-everyone').value = data.respond_to_everyone == null ? '' : String(!!data.respond_to_everyone);
+        $('#channel-edit-allow-pings').value = data.allow_everyone_pings == null ? '' : String(!!data.allow_everyone_pings);
 
         var note = $('#channel-persona-note');
         var persona = data.persona;
@@ -1396,6 +1411,7 @@
         var summary = $('#channel-edit-summary').value;
         var userMemory = $('#channel-edit-user-memory').value;
         var everyone = $('#channel-edit-everyone').value;
+        var allowPings = $('#channel-edit-allow-pings').value;
         var body = {
             model: $('#channel-edit-model').value || null,
             system_prompt: $('#channel-edit-prompt').value || null,
@@ -1403,7 +1419,8 @@
             memory_summary_enabled: summary === '' ? null : summary === 'true',
             max_memory_summaries: maxSummaries,
             user_memory_enabled: userMemory === '' ? null : userMemory === 'true',
-            respond_to_everyone: everyone === '' ? null : everyone === 'true'
+            respond_to_everyone: everyone === '' ? null : everyone === 'true',
+            allow_everyone_pings: allowPings === '' ? null : allowPings === 'true'
         };
         if (provider) body.provider = provider;
 
@@ -3627,7 +3644,7 @@
         bindEvent('#channel-edit-form', 'submit', saveChannel);
         bindEvent('#channel-reset-btn', 'click', resetChannel);
         bindEvent('#channel-edit-provider', 'change', onChannelProviderChange);
-        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory', '#channel-edit-everyone'].forEach(function (sel) {
+        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory', '#channel-edit-everyone', '#channel-edit-allow-pings'].forEach(function (sel) {
             bindEvent(sel, 'input', updateSourceChips);
             bindEvent(sel, 'change', updateSourceChips);
         });

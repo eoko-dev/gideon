@@ -427,6 +427,14 @@
                                         <small class="field-hint">Default for all channels. Each channel can override this in its settings.</small>
                                     </div>
                                     <div class="field">
+                                        <label for="setting-allow-everyone-pings">Let Gideon ping @everyone / @here</label>
+                                        <select id="setting-allow-everyone-pings">
+                                            <option value="false">No - @everyone in a reply is plain text</option>
+                                            <option value="true">Yes - for people who can ping everyone themselves</option>
+                                        </select>
+                                        <small class="field-hint">Default for all channels; each channel can override it. The bot also needs the Mention @everyone permission.</small>
+                                    </div>
+                                    <div class="field">
                                         <label for="setting-stream-replies">Stream replies</label>
                                         <select id="setting-stream-replies">
                                             <option value="true">On - show replies as they're written</option>
@@ -1240,6 +1248,18 @@
                                     <option value="false">No</option>
                                 </select>
                                 <small class="field-hint" id="channel-everyone-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-allow-pings">Gideon may ping @everyone</label>
+                                    <span class="chip chip-source" data-source-for="allow_everyone_pings" hidden></span>
+                                </div>
+                                <select id="channel-edit-allow-pings">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                                <small class="field-hint" id="channel-allow-pings-hint"></small>
                             </div>
                         </div>
                     </fieldset>

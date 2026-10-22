@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Optional
 import discord
 
 from . import budget, llm_result
-from .discord_fmt import chunk_message
+from .discord_fmt import EVERYONE_ALLOWED_MENTIONS, chunk_message, mentions_everyone
+from .permissions import has_channel_permission
 from .llm_formatting import apply_outbound_mentions, collect_mention_targets
 from .llm_result import ChatResult, call_chat
 from .memory_service import check_and_rotate_session, llm_clients, schedule_compaction
@@ -376,7 +377,8 @@ class ConversationService:
     async def send(self, conversation: Conversation, text: str,
                    history: Optional[List[Dict[str, Any]]] = None,
                    people: Optional[List[Any]] = None,
-                   reply_to: Any = None) -> List[Any]:
+                   reply_to: Any = None,
+                   allowed_mentions: Any = None) -> List[Any]:
         """Sends a reply in Discord-sized chunks, via the persona webhook when active.
 
         '@Name' written by the model becomes a real ping for known participants.
@@ -387,6 +389,8 @@ class ConversationService:
         sent = []
         for index, chunk in enumerate(chunk_message(apply_outbound_mentions(text, targets))):
             kwargs = {"reference": reply_to} if index == 0 and reply_to is not None else {}
+            if allowed_mentions is not None:
+                kwargs["allowed_mentions"] = allowed_mentions
             sent.append(await self.bot.webhook_sender.send_response(
                 conversation.channel, chunk, conversation.channel_id, **kwargs))
         return sent
@@ -488,12 +492,34 @@ class ConversationService:
                 return result
 
             await self.record(conversation, {"role": "assistant", "content": text})
-            if streamed and await streamer.finish(text):
+            # Edits never notify, so a reply that pings @everyone is re-sent
+            # as a fresh message instead of finishing the stream
+            ping_everyone = mentions_everyone(text) and self.may_ping_everyone(conversation, request.author)
+            if streamed and not ping_everyone and await streamer.finish(text):
                 return result
             if streamer is not None and streamer.started:
                 await streamer.discard()
-            await self.send(conversation, text, history, people, reply_to=reply_to)
+            await self.send(conversation, text, history, people, reply_to=reply_to,
+                            allowed_mentions=EVERYONE_ALLOWED_MENTIONS if ping_everyone else None)
             return result
+
+    def may_ping_everyone(self, conversation: Conversation, author) -> bool:
+        """Whether this reply may ping @everyone/@here.
+
+        Only when an admin allowed it for the channel, and only for someone
+        who could ping everyone there themselves — so members can't use
+        Gideon to get around Discord's own permission.
+        """
+        getter = getattr(self.state, "get_effective_allow_everyone_pings", None)
+        if getter is None:
+            return False
+        try:
+            if not getter(conversation.channel_id):
+                return False
+        except Exception as e:
+            logger.error(f"[Conversation] Could not read allow_everyone_pings: {e}")
+            return False
+        return has_channel_permission(author, conversation.channel, mention_everyone=True)
 
     def _streamer(self, conversation: Conversation, client, history, people, reply_to):
         """A StreamingReply when the client can stream and streaming is on, else None."""

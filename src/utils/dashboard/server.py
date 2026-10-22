@@ -57,16 +57,17 @@ SETTINGS_INT_RANGES = {
 # Daily per-user LLM spend cap in USD (0 = unlimited)
 COST_BUDGET_RANGE = (0.0, 1000.0)
 SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled',
-                        'respond_to_everyone', 'stream_replies', 'welcome_enabled')
+                        'respond_to_everyone', 'allow_everyone_pings', 'stream_replies', 'welcome_enabled')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
 }
-CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone')
+CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone',
+                              'allow_everyone_pings')
 CHANNEL_OVERRIDE_FIELDS = (
     'model', 'provider', 'system_prompt',
     'session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries', 'user_memory_enabled',
-    'respond_to_everyone',
+    'respond_to_everyone', 'allow_everyone_pings',
 )
 
 
@@ -542,6 +543,7 @@ class DashboardServer:
             'tool_calling_enabled': state.get_tool_calling_enabled(),
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
             'respond_to_everyone': state.get_respond_to_everyone(),
+            'allow_everyone_pings': state.get_allow_everyone_pings(),
             'stream_replies': state.get_stream_replies(),
             'max_unprompted_posts_per_hour': state.get_max_unprompted_posts_per_hour(),
             'welcome_enabled': state.get_welcome_enabled(),
@@ -648,6 +650,7 @@ class DashboardServer:
             'tool_calling_enabled': state.set_tool_calling_enabled,
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
             'respond_to_everyone': state.set_respond_to_everyone,
+            'allow_everyone_pings': state.set_allow_everyone_pings,
             'stream_replies': state.set_stream_replies,
             'max_unprompted_posts_per_hour': state.set_max_unprompted_posts_per_hour,
             'welcome_enabled': state.set_welcome_enabled,
@@ -719,7 +722,8 @@ class DashboardServer:
         cursor = self.bot.state_manager.db_manager._get_cursor()
         cursor.execute(
             "SELECT channel_id, model, provider, system_prompt, session_timeout_hours, "
-            "memory_summary_enabled, max_memory_summaries, user_memory_enabled, respond_to_everyone "
+            "memory_summary_enabled, max_memory_summaries, user_memory_enabled, respond_to_everyone, "
+            "allow_everyone_pings "
             "FROM CHANNEL_CONFIG"
         )
         return {row['channel_id']: dict(row) for row in cursor.fetchall()}
@@ -773,7 +777,7 @@ class DashboardServer:
         memory_config = {
             name: state._get_channel_memory_config(channel_id, name)
             for name in ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
-                         'user_memory_enabled', 'respond_to_everyone')
+                         'user_memory_enabled', 'respond_to_everyone', 'allow_everyone_pings')
         }
 
         raw_persona = state.get_channel_persona(channel_id)
@@ -809,6 +813,7 @@ class DashboardServer:
             'effective_max_memory_summaries': state.get_effective_max_memory_summaries(channel_id),
             'effective_user_memory_enabled': state.get_effective_user_memory_enabled(channel_id),
             'effective_respond_to_everyone': state.get_effective_respond_to_everyone(channel_id),
+            'effective_allow_everyone_pings': state.get_effective_allow_everyone_pings(channel_id),
             'persona': persona,
             'sources': sources,
         })

@@ -285,3 +285,82 @@ class ReplyReferenceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ─── Gideon pinging @everyone (admin opt-in) ─────────────────────────────────
+
+class EveryonePingTests(unittest.IsolatedAsyncioTestCase):
+    def make(self, allowed, can_mention_everyone, reply="@everyone dinner is ready!"):
+        from src.utils.conversation_service import Conversation, ConversationService, ReplyRequest
+        from tests.test_conversation_service import FakeState as ServiceState, RecordingClient
+
+        state = ServiceState()
+        state.get_effective_allow_everyone_pings = lambda channel_id: allowed
+        self.sent = []
+
+        async def send_response(channel, text, channel_id, **kwargs):
+            self.sent.append((text, kwargs.get("allowed_mentions")))
+
+        bot = types.SimpleNamespace(state_manager=state, openrouter_client=RecordingClient(replies=[reply]),
+                                    openai_client=None, ai_horde_client=None, get_cog=lambda name: None,
+                                    webhook_sender=types.SimpleNamespace(send_response=send_response))
+        perms = discord.Permissions(mention_everyone=can_mention_everyone)
+        channel = types.SimpleNamespace(id=1, typing=lambda: _Typing(), send=mock.AsyncMock(),
+                                        permissions_for=lambda member: perms)
+        author = types.SimpleNamespace(id=5, display_name="Alice", name="alice", bot=False)
+        request = ReplyRequest(conversation=Conversation(channel=channel, channel_id="C"), author=author,
+                               content="tell everyone dinner is ready", recorded=False)
+        return ConversationService(bot), request
+
+    async def test_off_by_default_keeps_everyone_inert(self):
+        service, request = self.make(allowed=False, can_mention_everyone=True)
+        await service.respond(request)
+        self.assertEqual(self.sent, [("@everyone dinner is ready!", None)])  # safe defaults apply
+
+    async def test_allowed_for_someone_who_can_ping_everyone(self):
+        from src.utils.discord_fmt import EVERYONE_ALLOWED_MENTIONS
+        service, request = self.make(allowed=True, can_mention_everyone=True)
+        await service.respond(request)
+        self.assertIs(self.sent[0][1], EVERYONE_ALLOWED_MENTIONS)
+        self.assertTrue(EVERYONE_ALLOWED_MENTIONS.everyone)
+        self.assertFalse(EVERYONE_ALLOWED_MENTIONS.roles)
+
+    async def test_members_without_the_permission_cannot_use_gideon_to_ping(self):
+        service, request = self.make(allowed=True, can_mention_everyone=False)
+        await service.respond(request)
+        self.assertIsNone(self.sent[0][1])
+
+    async def test_replies_without_a_ping_use_safe_mentions(self):
+        service, request = self.make(allowed=True, can_mention_everyone=True, reply="Dinner is ready.")
+        await service.respond(request)
+        self.assertIsNone(self.sent[0][1])
+
+    async def test_webhook_send_honours_override(self):
+        from src.utils.discord_fmt import EVERYONE_ALLOWED_MENTIONS
+        sender = WebhookSender(types.SimpleNamespace())
+        webhook = types.SimpleNamespace(send=mock.AsyncMock())
+        await sender._webhook_send(webhook, "@everyone hi", {"display_name": "Bot"},
+                                   allowed_mentions=EVERYONE_ALLOWED_MENTIONS)
+        self.assertIs(webhook.send.call_args.kwargs["allowed_mentions"], EVERYONE_ALLOWED_MENTIONS)
+
+
+class AllowEveryonePingsStateTests(DashboardTestCase):
+    async def test_default_override_and_dashboard(self):
+        self.assertFalse(self.state.get_effective_allow_everyone_pings("100"))
+        self.state.set_channel_memory_config("100", allow_everyone_pings=True)
+        self.assertTrue(self.state.get_effective_allow_everyone_pings("100"))
+        await self.state.add_discord_thread("556", "100", "t")
+        self.assertTrue(self.state.get_effective_allow_everyone_pings("556"))
+
+        await self.login()
+        resp = await self.client.put("/api/settings", json={"allow_everyone_pings": True})
+        self.assertEqual(resp.status, 200)
+        self.assertTrue((await (await self.client.get("/api/settings")).json())["allow_everyone_pings"])
+        resp = await self.client.put("/api/channels/200", json={"allow_everyone_pings": False})
+        self.assertEqual(resp.status, 200, await resp.text())
+        body = await (await self.client.get("/api/channels/200")).json()
+        self.assertEqual((body["allow_everyone_pings"], body["effective_allow_everyone_pings"]), (0, False))
+        await self.client.delete("/api/channels/200")
+        body = await (await self.client.get("/api/channels/200")).json()
+        self.assertIsNone(body["allow_everyone_pings"])
+        self.assertTrue(body["effective_allow_everyone_pings"])

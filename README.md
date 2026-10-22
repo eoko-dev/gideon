@@ -41,7 +41,8 @@ Gideon is an AI butler for your Discord server. Talk to it naturally — @mentio
   + **Polls, Threads & More**: "make a poll: pizza vs tacos" · "start a thread for this" · "roll 3d6" · "what's 15% of 250?" · "what's 3pm EST in Tokyo?"
   + **Translations, definitions and conversions** are answered directly
   + **Conversation**: Any other @mention is a normal chat
-* **Safe by Design** - Lookups never read outside the channel you're in; text from web pages or other people's messages is treated as data, and once Gideon has read it, actions like reminders, polls and memory writes are paused for the rest of that reply. Gideon never pings @everyone, @here or roles.
+* **Safe by Design** - Lookups never read outside the channel you're in; text from web pages or other people's messages is treated as data, and once Gideon has read it, actions like reminders, polls and memory writes are paused for the rest of that reply. Gideon never pings roles.
+* **@everyone Announcements** *(opt-in)* - Let Gideon ping @everyone / @here in its replies ("@Gideon tell everyone game night starts in 10"). Off by default; turn it on in the dashboard globally or per channel. It only works for people who are allowed to ping everyone themselves, so nobody can use Gideon to get around Discord's permission.
 * **Web Search** - Search the web for current information through conversational AI responses or natural language (@mention)
 * **Image Generation** - Create stunning visuals using the unified `/dream` command or natural language @mentions. Supports multiple backend providers (AI Horde, Cloudflare Worker, OpenAI DALL-E, ComfyUI, OpenRouter). Admins can configure the active provider and its default settings.
 * **Video Generation** - Generate AI videos with the `/video` command or directly from the dashboard, powered by OpenRouter's asynchronous video API. Supports multiple models (Veo 3.1, Sora 2 Pro, Seedance 2.0/1.5, Wan 2.7/2.6, Kling O1, etc.) with configurable duration, aspect ratio, resolution (480p, 720p, 1080p, 2K, or 4K), audio, seed, and optional reference image (image-to-video).
@@ -92,7 +93,7 @@ Give Gideon a unique identity in every channel using Discord webhooks. Each pers
 * **API Key Management** - Add, edit, validate, and delete API keys for all providers via the dashboard, with Fernet-encrypted database storage and full audit logging
 * **Personas Tab** - Browse, create, edit, and apply channel personas and templates from the browser
 * **Backup & Restore** - Export and import your configuration (JSON) or full database (SQLite) directly from the dashboard
-* **Settings Management** - Edit global settings, channel overrides, session timeout, auto-summarize, tool calling, streaming, whether @everyone / @here pings Gideon (globally or per channel), and welcomes from the browser
+* **Settings Management** - Edit global settings, channel overrides, session timeout, auto-summarize, tool calling, streaming, whether @everyone / @here pings Gideon and whether Gideon may ping @everyone itself (globally or per channel), and welcomes from the browser
 * **Usage & Cost Controls** - See cost, tokens and image/video counts by feature, model and person; set a cheap utility model for background work and per-user daily limits for chat spend, images and videos
 * **Thread & Channel Management** - View, edit, and delete threads and channel configurations
 * **System Diagnostics** - Run diagnostics, check provider status, and trigger data pruning
@@ -213,7 +214,7 @@ python3 -m src
    * Copy your bot token for the `.env` file
 3. Generate invite URL in "OAuth2 > URL Generator":
    * Scopes: `bot`, `applications.commands`
-   * Permissions: Send Messages, Send Messages in Threads, Read Message History, Embed Links, Attach Files, Add Reactions, Use Slash Commands, Create Public Threads, Manage Threads, Send Polls, **Manage Webhooks** (required for personas), **Create Events** (optional, so events also appear in the server's Events list)
+   * Permissions: Send Messages, Send Messages in Threads, Read Message History, Embed Links, Attach Files, Add Reactions, Use Slash Commands, Create Public Threads, Manage Threads, Send Polls, **Manage Webhooks** (required for personas), **Create Events** (optional, so events also appear in the server's Events list), **Mention @everyone, @here, and All Roles** (optional, only if you'll let Gideon ping @everyone)
 
 ### Tool Calling Configuration (Optional)
 
@@ -305,9 +306,9 @@ Press **Ctrl/⌘ + K** anywhere to jump to a tab, setting, channel, thread or pe
 | Group | Tab | Description |
 | --- | --- | --- |
 | Core | Overview | Bot status, provider and API key health, recent errors, uptime, latency, usage and cost (by feature, model and person), quick actions (sync slash commands) |
-| Core | Settings | Global model, provider, system prompt, history limits, memory/session settings, tool calling, streaming, @everyone replies, community (welcomes, unprompted-post limit) and cost controls (utility model, per-user daily limits) |
+| Core | Settings | Global model, provider, system prompt, history limits, memory/session settings, tool calling, streaming, @everyone (answering it and pinging it), community (welcomes, unprompted-post limit) and cost controls (utility model, per-user daily limits) |
 | Core | API Keys | Encrypted API key management with test-before-save, import from `.env`, and audit logging |
-| Conversations | Channels | Per-channel model, provider, prompt, memory and @everyone overrides, showing where each effective value comes from (global, channel or persona) |
+| Conversations | Channels | Per-channel model, provider, prompt, memory and @everyone overrides (answering and pinging), showing where each effective value comes from (global, channel or persona) |
 | Conversations | Threads | Manage AI conversation threads (rename, configure, delete) |
 | Conversations | Personas | Browse templates, configure per-channel personas, create custom templates |
 | Conversations | Memory | Browse and manage long-term channel memories and per-person notes; clear memories or trigger summarization |
@@ -662,6 +663,10 @@ gideon/
 * **Gideon Doesn't Answer @everyone / @here:**
   * That's switchable: check *Answer @everyone / @here* in the dashboard Settings and the channel's own override.
   * Discord only treats it as a ping when the author is allowed to mention everyone.
+
+* **Gideon Writes "@everyone" but Nobody Is Pinged:**
+  * Pinging is off by default: turn on *Let Gideon ping @everyone / @here* in Settings (or the channel's override).
+  * The person asking must be allowed to mention everyone in that channel, and the bot needs the **Mention @everyone, @here, and All Roles** permission.
 
 * **Reminders at the Wrong Time:**
   * Times use the server's timezone (`TZ` in `.env`) until you run `/me timezone`.

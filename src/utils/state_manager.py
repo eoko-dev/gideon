@@ -50,6 +50,7 @@ CONFIG_KEY_MAX_MEMORY_SUMMARIES = "max_memory_summaries"
 CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
 CONFIG_KEY_RESPOND_TO_EVERYONE = "respond_to_everyone"
+CONFIG_KEY_ALLOW_EVERYONE_PINGS = "allow_everyone_pings"
 CONFIG_KEY_STREAM_REPLIES = "stream_replies"
 CONFIG_KEY_MAX_UNPROMPTED_POSTS = "max_unprompted_posts_per_hour"
 CONFIG_KEY_WELCOME_ENABLED = "welcome_enabled"
@@ -113,6 +114,8 @@ class BotStateManager:
 
         # Whether @everyone/@here counts as mentioning Gideon (per-channel override in CHANNEL_CONFIG)
         self.respond_to_everyone = await self._load_or_set_config(CONFIG_KEY_RESPOND_TO_EVERYONE, True, 'bool')
+        # Whether Gideon's own replies may ping @everyone/@here (per-channel override in CHANNEL_CONFIG)
+        self.allow_everyone_pings = await self._load_or_set_config(CONFIG_KEY_ALLOW_EVERYONE_PINGS, False, 'bool')
 
         # Unprompted posts (reminders, RSVP nudges, welcomes) per channel per hour; 0 = no limit
         self.max_unprompted_posts_per_hour = await self._load_or_set_config(CONFIG_KEY_MAX_UNPROMPTED_POSTS, 6, 'int')
@@ -388,6 +391,23 @@ class BotStateManager:
             return bool(int(val))
         return self.get_respond_to_everyone()
 
+    def get_allow_everyone_pings(self) -> bool:
+        return bool(self.allow_everyone_pings)
+
+    async def set_allow_everyone_pings(self, value: bool):
+        self.allow_everyone_pings = bool(value)
+        await self._save_config(CONFIG_KEY_ALLOW_EVERYONE_PINGS, self.allow_everyone_pings, 'bool')
+
+    def get_effective_allow_everyone_pings(self, channel_id: str) -> bool:
+        """Whether Gideon's replies may ping @everyone/@here here: channel override, else global.
+
+        A thread follows its parent channel's setting.
+        """
+        val = self._get_channel_memory_config(self.get_memory_scope(channel_id), 'allow_everyone_pings')
+        if val is not None:
+            return bool(int(val))
+        return self.get_allow_everyone_pings()
+
     def _get_channel_memory_config(self, channel_id: str, column: str):
         """Reads a single memory config column from CHANNEL_CONFIG, returns None if not set."""
         import sqlite3
@@ -404,8 +424,9 @@ class BotStateManager:
             return None
 
     _CHANNEL_MEMORY_FIELDS = ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
-                              'user_memory_enabled', 'respond_to_everyone')
-    _CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone')
+                              'user_memory_enabled', 'respond_to_everyone', 'allow_everyone_pings')
+    _CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone',
+                                   'allow_everyone_pings')
 
     def set_channel_memory_config(self, channel_id: str, **overrides):
         """Updates the given per-channel memory overrides; a value of None clears it (falls back to global)."""
@@ -444,7 +465,8 @@ class BotStateManager:
                      memory_summary_enabled = NULL,
                      max_memory_summaries = NULL,
                      user_memory_enabled = NULL,
-                     respond_to_everyone = NULL
+                     respond_to_everyone = NULL,
+                     allow_everyone_pings = NULL
                  WHERE channel_id = ?;"""
         try:
             with self.db_manager._conn:
