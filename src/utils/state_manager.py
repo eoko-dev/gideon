@@ -1188,7 +1188,8 @@ class BotStateManager:
             if recent:
                 recent_block = "\n".join(
                     ["--- Channel Memory ---",
-                     "Here is what I remember from previous conversations in this channel:"]
+                     "Here is what I remember from previous conversations in this channel. When you "
+                     "draw on one, say roughly when it was (e.g. \"back on Oct 3\"):"]
                     + [self._format_memory_line(m) for m in recent])
             related_block = ""
             if related:

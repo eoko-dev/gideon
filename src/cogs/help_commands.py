@@ -218,7 +218,9 @@ def build_overview_embed(categories: Dict[str, Dict], is_admin: bool = False,
                         "• \"draw a sunset over mountains\"\n"
                         "• \"what's the latest on the Artemis mission?\" (web search)\n"
                         "• \"make a poll: pizza or tacos?\" · \"roll 2d20\" · \"what's 15% of 80?\"\n"
-                        "• \"remember that I'm vegetarian\"")
+                        "• \"what did Sam say about the raid?\" · \"what's pinned here?\"\n"
+                        "• \"remember that I'm vegetarian\" · \"what are my reminders?\"\n"
+                        "Replying to one of my messages works too.")
     else:
         description += "You can also @mention me to chat. (Natural-language tools are turned off.)"
     embed = discord.Embed(title="Gideon Help", description=description, color=discord.Color.blurple())

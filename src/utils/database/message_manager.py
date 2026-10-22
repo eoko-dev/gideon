@@ -135,6 +135,37 @@ class MessageManager:
             logger.error(f"Error getting distinct channel ids: {e}", exc_info=True)
             return []
 
+    def search_in_scope(self, channel_id: str, terms: List[str], thread_ids: List[str] = (),
+                        limit: int = 10) -> List[Dict[str, Any]]:
+        """Stored messages in a channel (and its AI threads / given threads) containing every term.
+
+        Never looks outside the channel: a conversation's search stays in its
+        own channel, like its memory.
+        """
+        terms = [t for t in terms if t][:6]
+        if not terms:
+            return []
+        where = ["(channel_id = ? OR thread_id IN (SELECT thread_id FROM THREADS WHERE channel_id = ?)"]
+        params: List[Any] = [channel_id, channel_id]
+        if thread_ids:
+            where[0] += f" OR thread_id IN ({', '.join('?' for _ in thread_ids)})"
+            params.extend(thread_ids)
+        where[0] += ")"
+        for term in terms:
+            where.append("content LIKE ? ESCAPE '\\'")
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params.append(f"%{escaped}%")
+        sql = (f"SELECT role, content, timestamp, user_name, thread_id FROM MESSAGES "
+               f"WHERE {' AND '.join(where)} ORDER BY timestamp DESC LIMIT ?;")
+        params.append(int(limit))
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute(sql, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error searching messages in {channel_id}: {e}", exc_info=True)
+            return []
+
     def get_distinct_untracked_thread_ids(self) -> List[str]:
         """Thread IDs with stored messages that aren't AI threads (user threads, forum posts)."""
         try:

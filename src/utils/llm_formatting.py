@@ -43,6 +43,16 @@ _ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 _CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
 
 
+def clean_speaker_name(name: str, limit: int = 40) -> str:
+    """A display name safe to use as a speaker label.
+
+    Display names are user-controlled; one containing a newline or a
+    "Name:" pattern could make a single turn look like several speakers.
+    """
+    cleaned = " ".join(str(name).split()).replace(":", "")
+    return cleaned[:limit] or "Someone"
+
+
 def format_speaker_content(name: Optional[str], content: Any) -> Any:
     """Prefixes content with the speaker's name, e.g. 'Alice: hello'.
 
@@ -53,7 +63,7 @@ def format_speaker_content(name: Optional[str], content: Any) -> Any:
     if not name or not isinstance(content, str):
         return content
 
-    prefix = f"{name}: "
+    prefix = f"{clean_speaker_name(name)}: "
     if content.startswith(prefix):
         return content
     return prefix + content

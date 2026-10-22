@@ -499,7 +499,13 @@ Gideon keeps short notes about each person, unique to each channel (a thread sha
 When tool calling is enabled (the default; legacy `INTENT_DISCOVERY=TRUE` also enables it):
 1. User @mentions bot: "@Gideon remind me in 2 hours to check logs" (or uses `/chat`, or writes in an AI thread)
 2. `ConversationService` sends the message to the **primary LLM model** with tool definitions attached
-3. The model decides natively whether to call a tool (`set_reminder`, `generate_image`, `web_search`, `calculate`, `create_poll`, `convert_timezone`, `roll_dice`, `schedule_event`, `remember_about_me`, `forget_about_me`) or respond conversationally. Translation, definitions and unit conversion are answered by the model directly (they used to be tools that only made a second LLM call)
+3. The model decides natively whether to call a tool or respond conversationally. Translation, definitions and unit conversion are answered by the model directly (they used to be tools that only made a second LLM call). Tools:
+   - Actions: `set_reminder`, `generate_image`, `create_poll`, `schedule_event`, `create_thread`, `cancel_my_reminder`, `remember_about_me`, `forget_about_me`
+   - Lookups: `web_search`, `read_web_page` (via `safe_fetch`), `read_recent_messages` (Discord history of this channel/thread), `search_conversation_history` (stored messages of this channel and its threads only), `search_memory` (this channel's summaries), `get_pinned_messages`, `get_server_info`, `get_member_info`, `list_my_reminders`
+   - Pure: `calculate`, `roll_dice`, `convert_timezone`
+   - Every lookup stays inside the current channel (and its threads), like memory. Side-effect handlers return `None` on success or a reason string on failure, so the tool result never claims something happened when it didn't; confirmations go out through the persona webhook
+   - **Untrusted content guard**: tools registered with `untrusted_output=True` return text written by someone else, wrapped in `<untrusted_data>`. Once one has run in a reply, tools registered with `side_effect=True` are withheld (not offered, and refused if called) for the rest of that reply
+   - While tools run, a streamed reply shows a status line (`tool_status_line()`)
 4. If the model requests tool calls, each tool is executed via `tool_registry.execute_tool()` and results are fed back to the model
 5. The model generates a final text response incorporating the tool results
 6. If tool calling is disabled, falls back to plain conversation (no tools)
@@ -511,10 +517,7 @@ When tool calling is enabled (the default; legacy `INTENT_DISCOVERY=TRUE` also e
 - Supports multi-tool requests (e.g., "calculate 15% of 250 and remind me about it at 5pm")
 - Uses conversation context (the model sees chat history, so "translate that" works)
 
-**Tool definitions** are managed in `src/utils/tool_registry.py`. To add a new tool:
-1. Add a tool definition to `TOOL_DEFINITIONS` (OpenAI function schema format)
-2. Add an execution function `_execute_new_tool()`
-3. Add a dispatch case in `execute_tool()`
+**Tool definitions** are managed in `src/utils/tool_registry.py`. To add a new tool, decorate an `async def _my_tool(args, ctx) -> str` with `@tool({...OpenAI function schema...}, no_repeat=..., side_effect=..., untrusted_output=...)`. Raise `ValueError` for errors the model should relay. `ctx` carries `bot`, `state`, `message`, `channel_id` (scope), `conversation`, `history`, `clients` and `cog`.
 
 ### Image Generation Flow
 1. User runs `/dream prompt:"sunset over mountains"`

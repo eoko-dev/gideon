@@ -13,6 +13,9 @@ async def handle_poll_creation(cog, message, channel_id, question, options, dura
     """
     Handle poll creation requests.
 
+    Posts the poll and returns None on success; on failure posts nothing and
+    returns the reason for the model to relay.
+
     Args:
         cog: The MentionCommands cog instance
         message: Discord message object
@@ -23,35 +26,23 @@ async def handle_poll_creation(cog, message, channel_id, question, options, dura
     """
     # Validate inputs
     if not question or not question.strip():
-        await message.channel.send(
-            "❌ I need a poll question. "
-            "Try something like: '@Gideon create a poll: Pizza or Tacos?'"
-        )
         logger.warning(f"[Poll] Missing question for user {message.author.id}")
-        return
+        return "I need a poll question. " "Try something like: '@Gideon create a poll: Pizza or Tacos?'" 
 
     if not options or len(options) < 2:
-        await message.channel.send(
-            "❌ I need at least 2 poll options. "
-            "Try something like: '@Gideon create a poll: Pizza or Tacos?'"
-        )
         logger.warning(f"[Poll] Insufficient options for user {message.author.id}")
-        return
+        return "I need at least 2 poll options. " "Try something like: '@Gideon create a poll: Pizza or Tacos?'" 
 
     if len(options) > 10:
-        await message.channel.send(
-            "❌ Maximum 10 poll options allowed. Please reduce the number of options."
-        )
         logger.warning(f"[Poll] Too many options ({len(options)}) for user {message.author.id}")
-        return
+        return "Maximum 10 poll options allowed. Please reduce the number of options." 
 
     # Gideon posts the poll with its own permissions, so the author must be
     # allowed to post one themselves
     if getattr(message, 'guild', None) and not has_channel_permission(
             message.author, message.channel, send_polls=True):
-        await message.channel.send("⛔ You don't have permission to create polls in this channel.")
         logger.info(f"[Poll] User {message.author.id} lacks Send Polls in channel {channel_id}")
-        return
+        return "The user doesn't have permission to create polls in this channel."
 
     try:
         # Check if Discord native polls are available (discord.py >= 2.3.0)
@@ -73,11 +64,7 @@ async def handle_poll_creation(cog, message, channel_id, question, options, dura
                 await message.channel.send(poll=poll)
 
                 # Add to conversation history
-                await cog.state.add_to_channel_history(channel_id, {
-                    "role": "assistant",
-                    "content": f"Created poll: {question} with {len(options)} options",
-                    "timestamp": datetime.now()
-                })
+                await cog.record_tool_note(message, channel_id, f"Created poll: {question} with {len(options)} options")
 
                 logger.info(f"[Poll] User {message.author.id} created native poll: {question}")
                 return
@@ -109,14 +96,10 @@ async def handle_poll_creation(cog, message, channel_id, question, options, dura
             await sent_message.add_reaction(number_emojis[i])
 
         # Add to conversation history
-        await cog.state.add_to_channel_history(channel_id, {
-            "role": "assistant",
-            "content": f"Created poll: {question} with {len(options)} options (reaction-based)",
-            "timestamp": datetime.now()
-        })
+        await cog.record_tool_note(message, channel_id, f"Created poll: {question} with {len(options)} options (reaction-based)")
 
         logger.info(f"[Poll] User {message.author.id} created reaction-based poll: {question}")
 
     except Exception as e:
         logger.exception(f"[Poll] Error for user {message.author.id}: {e}")
-        await message.channel.send(f"❌ Poll creation failed: {str(e)}")
+        return "The poll could not be created."

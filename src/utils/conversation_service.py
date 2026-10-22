@@ -34,7 +34,10 @@ from .discord_fmt import chunk_message
 from .llm_formatting import apply_outbound_mentions, collect_mention_targets
 from .llm_result import ChatResult, call_chat
 from .memory_service import check_and_rotate_session, llm_clients, schedule_compaction
-from .tool_registry import execute_tool, get_tool_definitions, is_no_repeat_tool
+from .tool_registry import (
+    execute_tool, get_safe_tool_definitions, get_tool_definitions, is_no_repeat_tool,
+    is_side_effect_tool, returns_untrusted_text,
+)
 from .streaming import StreamingReply
 from .usage import usage_scope
 
@@ -46,6 +49,12 @@ _TOOL_STATUS = {
     "schedule_event": "📅 Scheduling the event…",
     "calculate": "🧮 Calculating…",
     "remember_about_me": "📝 Noting that down…",
+    "read_recent_messages": "📜 Reading back through the channel…",
+    "search_conversation_history": "🔍 Searching the conversation…",
+    "search_memory": "🧠 Checking my memory…",
+    "get_pinned_messages": "📌 Checking the pins…",
+    "read_web_page": "🌐 Reading the page…",
+    "create_thread": "🧵 Starting a thread…",
     "forget_about_me": "🧹 Forgetting that…",
 }
 
@@ -286,12 +295,15 @@ class ConversationService:
         Each round's tool results are appended to the conversation so the model
         can synthesize an answer, chain tools, or recover from a tool error.
         """
-        tools = get_tool_definitions()
         max_iterations = self.state.get_tool_calling_max_iterations()
         executed_calls: set = set()
+        # Set once a tool has returned text written by someone else (web pages,
+        # other people's messages); side-effect tools are withheld from then on
+        tainted = False
 
         on_delta = streamer.update if streamer is not None else None
         for iteration in range(max_iterations):
+            tools = get_safe_tool_definitions() if tainted else get_tool_definitions()
             result = await call_chat(
                 client, messages=conversation_context, model=model_name,
                 system_prompt=system_prompt, images=images if iteration == 0 else None,
@@ -327,7 +339,12 @@ class ConversationService:
                 # result, so point it back at that instead of re-posting.
                 call_key = ((func_name, json.dumps(func_args, sort_keys=True))
                             if is_no_repeat_tool(func_name) else None)
-                if call_key and call_key in executed_calls:
+                if tainted and is_side_effect_tool(func_name):
+                    logger.warning(f"[Tool] Withholding '{func_name}' after untrusted content was read")
+                    tool_result = (f"Error: '{func_name}' is not available for the rest of this reply because "
+                                   f"text from outside the conversation was read. Tell the user what you would "
+                                   f"do and ask them to confirm in a new message.")
+                elif call_key and call_key in executed_calls:
                     logger.warning(f"[Tool] Skipping duplicate '{func_name}' call with identical arguments")
                     tool_result = (f"Duplicate call skipped: '{func_name}' already ran with these exact "
                                    f"arguments during this reply. Use its earlier result above to answer "
@@ -343,6 +360,11 @@ class ConversationService:
                     "tool_call_id": tc.get("id", ""),
                     "content": tool_result,
                 })
+
+            # Calls in this round were chosen before the model saw these
+            # results; later rounds might be steered by them
+            if any(returns_untrusted_text(tc.get("function", {}).get("name", "")) for tc in tool_calls):
+                tainted = True
 
         # Iteration budget exhausted — force a text answer (no tools offered)
         logger.warning(f"[Tool] Iteration budget ({max_iterations}) exhausted; forcing text response")

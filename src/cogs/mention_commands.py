@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 from ..utils import budget
 from ..utils.conversation_service import Conversation, ConversationService, ReplyRequest
 from ..utils.llm_result import call_chat
+from ..utils.tool_registry import untrusted_block
 from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from ..utils.timeutil import to_epoch
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
@@ -69,6 +70,14 @@ class MentionCommands(commands.Cog):
             return Conversation(channel=message.channel, channel_id=str(message.channel.parent_id),
                                 thread_id=str(message.channel.id))
         return Conversation(channel=message.channel, channel_id=channel_id)
+
+    async def record_tool_note(self, message, channel_id: str, content: str):
+        """Records something a tool posted as an assistant turn in this conversation."""
+        try:
+            await self.service.record(self._conversation(message, channel_id),
+                                      {"role": "assistant", "content": content})
+        except Exception as e:
+            logger.error(f"[Tool] Could not record tool output: {e}", exc_info=True)
 
     # ─── History recording guard ────────────────────────────────────────────
 
@@ -159,6 +168,9 @@ class MentionCommands(commands.Cog):
         """
         Handle a reminder request detected from a mention.
 
+        Posts a confirmation and returns None on success; on failure posts
+        nothing and returns the reason for the model to relay.
+
         Args:
             message: Original Discord message object
             channel_id: Channel ID as string
@@ -167,62 +179,43 @@ class MentionCommands(commands.Cog):
         """
         # Validate inputs
         if not reminder_message or not reminder_message.strip():
-            await message.channel.send(
-                "❌ I detected you want a reminder, but I'm not sure what to remind you about. "
-                "Please try something like: '@Gideon remind me in 2 hours to check the oven'"
-            )
             logger.warning(f"[Tool] Missing reminder message for user {message.author.id}")
-            return
+            return "I detected you want a reminder, but I'm not sure what to remind you about. " "Please try something like: '@Gideon remind me in 2 hours to check the oven'" 
 
         if not time_expression or not time_expression.strip():
-            await message.channel.send(
-                "❌ I detected you want a reminder, but I'm not sure when. "
-                "Please specify a time like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
             logger.warning(f"[Tool] Missing time expression for user {message.author.id}")
-            return
+            return "I detected you want a reminder, but I'm not sure when. " "Please specify a time like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
 
         # Get ReminderCommands cog
         reminder_cog = self.bot.get_cog('ReminderCommands')
         if not reminder_cog:
-            await message.channel.send("⚠️ Reminder system not available.")
             logger.error("[Tool] ReminderCommands cog not found")
-            return
+            return "The reminder system isn't available right now."
 
         # Parse time using existing method
         try:
             parsed_time = await reminder_cog.parse_time_with_ai(time_expression, channel_id)
         except Exception as e:
             logger.error(f"[Tool] Error parsing time: {e}", exc_info=True)
-            await message.channel.send(
-                f"❌ Failed to parse time expression '{time_expression}'. "
-                f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
-            return
+            return f"Failed to parse time expression '{time_expression}'. " f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
 
         if parsed_time is None:
-            await message.channel.send(
-                f"❌ I couldn't understand the time '{time_expression}'. "
-                f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
             logger.warning(f"[Tool] Failed to parse time expression: {time_expression}")
-            return
+            return f"I couldn't understand the time '{time_expression}'. " f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
 
         # Validate time is not too far in the future (max 1 year)
         max_future = datetime.now() + timedelta(days=365)
         if parsed_time > max_future:
-            await message.channel.send(
-                "❌ Reminder time is too far in the future (max 1 year)."
-            )
             logger.warning(f"[Tool] Reminder time too far in future: {parsed_time}")
-            return
+            return "Reminder time is too far in the future (max 1 year)." 
 
         # Save reminder to database
         try:
             user_id = str(message.author.id)
+            # Deliver where it was asked for (a thread, if it was asked in one)
             reminder_id = self.state.add_reminder(
                 user_id=user_id,
-                channel_id=channel_id,
+                channel_id=str(message.channel.id),
                 message=reminder_message,
                 due_timestamp=parsed_time
             )
@@ -238,21 +231,15 @@ class MentionCommands(commands.Cog):
                 f"**Reminder ID:** {reminder_id}"
             )
 
-            # Send confirmation
-            await message.channel.send(confirmation_message)
-
-            # Add confirmation to channel history
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": confirmation_message,
-                "timestamp": datetime.now()
-            })
+            # Send confirmation (through the persona webhook when one is active)
+            await self.bot.webhook_sender.send_response(message.channel, confirmation_message, channel_id)
+            await self.record_tool_note(message, channel_id, confirmation_message)
 
             logger.info(f"[Tool] User {user_id} set reminder {reminder_id} for {parsed_time} via mention")
 
         except Exception as e:
             logger.exception(f"[Tool] Error setting reminder: {e}")
-            await message.channel.send(f"❌ Failed to save reminder: {str(e)}")
+            return "The reminder could not be saved."
 
     async def handle_image_generation_request(
         self,
@@ -267,6 +254,9 @@ class MentionCommands(commands.Cog):
         """
         Handle an image generation request detected from a mention.
 
+        Posts the image on success and returns None; on failure posts nothing
+        and returns the reason for the model to relay.
+
         Args:
             message: Original Discord message object
             channel_id: Channel ID as string
@@ -278,27 +268,18 @@ class MentionCommands(commands.Cog):
         """
         # Validate prompt
         if not prompt or not prompt.strip():
-            await message.channel.send(
-                "❌ I detected you want to generate an image, but I'm not sure what to create. "
-                "Please try something like: '@Gideon draw a sunset over mountains'"
-            )
             logger.warning(f"[Tool] Missing image prompt for user {message.author.id}")
-            return
+            return "No image description was given. Ask the user what to draw."
 
         limit_error = budget.generation_limit_error(self.state, message.author, budget.IMAGE, self.bot)
         if limit_error:
-            await message.channel.send(f"⛔ {limit_error}")
-            return
+            return limit_error
 
         # Get UnifiedImageCommands cog
         image_cog = self.bot.get_cog('UnifiedImageCommands')
         if not image_cog:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix="Image generation failed. The image generation system is not available. "
-            )
             logger.error("[Tool] UnifiedImageCommands cog not found")
-            return
+            return "The image generation system is not available."
 
         # Get active provider and config from database
         try:
@@ -319,12 +300,8 @@ class MentionCommands(commands.Cog):
                 provider_config = DEFAULT_CONFIGS.get(active_provider, {})
 
         except Exception as e:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix="Image generation failed. Could not retrieve image provider configuration. "
-            )
             logger.error(f"[Tool] Error getting image provider config: {e}")
-            return
+            return "Could not retrieve image provider configuration."
 
         # Select and validate client
         client = None
@@ -446,12 +423,8 @@ class MentionCommands(commands.Cog):
                         pass  # Fall back to client default ["image", "text"]
 
         if not client:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. The {provider_display_name} client is not configured. "
-            )
             logger.error(f"[Tool] {provider_display_name} client not available")
-            return
+            return f"The {provider_display_name} client is not configured."
 
         # Send "generating" message with typing indicator
         async with message.channel.typing():
@@ -465,11 +438,7 @@ class MentionCommands(commands.Cog):
         except Exception as e:
             logger.exception(f"[Tool] Exception during image generation with {active_provider}: {e}")
             await thinking_msg.delete()
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. An unexpected error occurred: {str(e)}. "
-            )
-            return
+            return "The image provider failed unexpectedly."
 
         # Handle result
         if result.get("success"):
@@ -503,38 +472,26 @@ class MentionCommands(commands.Cog):
             if result.get("revised_prompt"):
                 embed.add_field(name="Revised Prompt (DALL-E 3)", value=result["revised_prompt"], inline=False)
 
-            # Send image
+            # Send image (through the persona webhook when one is active)
+            files = []
             if "image_url" in result:
                 embed.set_image(url=result["image_url"])
-                await thinking_msg.edit(content=None, embed=embed)
             elif "image_data" in result:
                 # ComfyUI returns raw bytes - create Discord file from memory
-                file = discord.File(
-                    io.BytesIO(result["image_data"]),
-                    filename="generated_image.png"
-                )
+                files = [discord.File(io.BytesIO(result["image_data"]), filename="generated_image.png")]
                 embed.set_image(url="attachment://generated_image.png")
-                await thinking_msg.delete()
-                await message.channel.send(embed=embed, file=file)
             elif "local_path" in result:
-                file = discord.File(result["local_path"], filename="generated_image.png")
+                files = [discord.File(result["local_path"], filename="generated_image.png")]
                 embed.set_image(url="attachment://generated_image.png")
-                await thinking_msg.delete()
-                await message.channel.send(embed=embed, file=file)
             else:
                 await thinking_msg.delete()
-                await self.respond_conversationally(
-                    message, channel_id,
-                    prefix="Image generation failed. No image data returned. "
-                )
-                return
+                return "No image data returned."
+            await thinking_msg.delete()
+            await self.bot.webhook_sender.send_response(message.channel, "", channel_id,
+                                                        embeds=[embed], files=files or None)
 
             # Add to conversation history (assistant response)
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": f"[Generated image: {prompt}]",
-                "timestamp": datetime.now()
-            })
+            await self.record_tool_note(message, channel_id, f"[Generated image: {prompt}]")
 
             logger.info(f"[Tool] User {message.author.id} generated image via mention: '{prompt}' using {provider_display_name}")
 
@@ -542,11 +499,8 @@ class MentionCommands(commands.Cog):
             # Generation failed
             error_msg = result.get("error", "Unknown error")
             await thinking_msg.delete()
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. {error_msg}. "
-            )
             logger.warning(f"[Tool] Image generation failed for user {message.author.id}: {error_msg}")
+            return f"The image provider reported an error: {str(error_msg)[:200]}"
 
     async def handle_search_request(
         self,
@@ -643,7 +597,7 @@ class MentionCommands(commands.Cog):
 
         return (f"Web search results for '{query}'. The user has NOT seen these — "
                 f"use them to write your reply, keeping any source citations that "
-                f"matter:\n\n{response}")
+                f"matter:\n\n{untrusted_block('web search', response)}")
 
     # ─── Message listener ───────────────────────────────────────────────────
 

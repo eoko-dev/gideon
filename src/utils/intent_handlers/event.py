@@ -14,6 +14,10 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
     """
     Handle event scheduling requests.
 
+    Creates a server event (or, without permission or on failure, a reminder),
+    posts a confirmation and returns None; on failure posts nothing and
+    returns the reason for the model to relay.
+
     Args:
         cog: The MentionCommands cog instance
         message: Discord message object
@@ -25,40 +29,27 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
     """
     # Validate inputs
     if not event_name or not event_name.strip():
-        await message.channel.send(
-            "❌ I need an event name. "
-            "Try something like: '@Gideon schedule movie night Friday 8pm'"
-        )
         logger.warning(f"[Event] Missing event name for user {message.author.id}")
-        return
+        return "I need an event name. " "Try something like: '@Gideon schedule movie night Friday 8pm'" 
 
     if not date_time or not date_time.strip():
-        await message.channel.send(
-            "❌ I need to know when the event is. "
-            "Try something like: '@Gideon schedule movie night Friday 8pm'"
-        )
         logger.warning(f"[Event] Missing date/time for user {message.author.id}")
-        return
+        return "I need to know when the event is. " "Try something like: '@Gideon schedule movie night Friday 8pm'" 
 
     try:
         # Get ReminderCommands cog for time parsing
         reminder_cog = cog.bot.get_cog('ReminderCommands')
         if not reminder_cog:
-            await message.channel.send("⚠️ Event scheduling not available (reminder system needed).")
             logger.error("[Event] ReminderCommands cog not found")
-            return
+            return "Event scheduling not available (reminder system needed)."
 
         # Parse time using existing AI time parser (similar to reminders)
         # Note: parse_time_with_ai returns None if time is in the past, so no need for additional validation
         parsed_time = await reminder_cog.parse_time_with_ai(date_time, channel_id)
 
         if parsed_time is None:
-            await message.channel.send(
-                f"❌ I couldn't understand the time '{date_time}', or the time is in the past. "
-                f"Please try something like 'Friday 8pm', 'tomorrow at 2pm', or 'January 15 at 3pm'"
-            )
             logger.warning(f"[Event] Failed to parse time expression or time in past: {date_time}")
-            return
+            return f"I couldn't understand the time '{date_time}', or the time is in the past. " f"Please try something like 'Friday 8pm', 'tomorrow at 2pm', or 'January 15 at 3pm'" 
 
         # Try to create Discord scheduled event (if supported)
         # Note: py-cord API varies by version, so we try multiple approaches
@@ -111,14 +102,10 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
                     if description:
                         confirmation += f"\n**Description:** {description}"
 
-                    await message.channel.send(confirmation)
+                    await cog.bot.webhook_sender.send_response(message.channel, confirmation, channel_id)
 
                     # Add to conversation history
-                    await cog.state.add_to_channel_history(channel_id, {
-                        "role": "assistant",
-                        "content": f"Scheduled event: {event_name} at {parsed_time}",
-                        "timestamp": datetime.now()
-                    })
+                    await cog.record_tool_note(message, channel_id, f"Scheduled event: {event_name} at {parsed_time}")
 
                     logger.info(f"[Event] User {message.author.id} scheduled Discord event: {event_name} at {parsed_time}")
                     return
@@ -135,7 +122,7 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
 
         reminder_id = cog.state.add_reminder(
             user_id=user_id,
-            channel_id=channel_id,
+            channel_id=str(message.channel.id),
             message=reminder_message,
             due_timestamp=parsed_time
         )
@@ -156,17 +143,13 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
         if description:
             confirmation += f"\n**Description:** {description}"
 
-        await message.channel.send(confirmation)
+        await cog.bot.webhook_sender.send_response(message.channel, confirmation, channel_id)
 
         # Add to conversation history
-        await cog.state.add_to_channel_history(channel_id, {
-            "role": "assistant",
-            "content": f"Set event reminder: {event_name} at {parsed_time}",
-            "timestamp": datetime.now()
-        })
+        await cog.record_tool_note(message, channel_id, f"Set event reminder: {event_name} at {parsed_time}")
 
         logger.info(f"[Event] User {message.author.id} set event reminder: {event_name} at {parsed_time}")
 
     except Exception as e:
         logger.exception(f"[Event] Error for user {message.author.id}: {e}")
-        await message.channel.send(f"❌ Event scheduling failed: {str(e)}")
+        return "The event could not be scheduled."
