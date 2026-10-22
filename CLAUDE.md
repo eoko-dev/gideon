@@ -242,6 +242,13 @@ Each cog is a self-contained feature module loaded dynamically at startup:
 
 13. **`url_commands.py`** - URL summarization (`/summarize_url`, fetched through `safe_fetch`)
 
+15. **`context_menu_commands.py`** - Catch-ups and message context menus
+    - `/catchup [since] [focus]` and the "Summarize from here" message menu: a private (ephemeral) summary of what you missed — since your last message or a time window — read straight from Discord's channel history, summarized on the utility model, with `[n]` references turned into jump links (`src/utils/catchup.py`)
+    - "Ask Gideon": ask about any message (modal); the answer goes through `ConversationService` and is posted in the channel
+    - "Remind me about this": a reminder that links back to the message
+    - "Translate": private translation into the user's Discord language
+    - "Remember this about me": saves one of *your own* messages to your notes in this channel (respects opt-out and the channel's per-user memory setting)
+
 14. **`help_commands.py`** - Interactive `/help`, built from `bot.application_commands` so it always matches the registered commands
 
 ### Persona System

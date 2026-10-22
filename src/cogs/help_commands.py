@@ -55,12 +55,15 @@ def build_categories(bot) -> Dict[str, Dict]:
              "description": "Right-click (or long-press) a message → Apps", "commands": [],
              "admin_commands": [], "roots": set()}
 
-    for command, root, full_name in sorted(iter_slash_commands(bot.application_commands), key=lambda t: t[2]):
+    # pending_application_commands is everything the cogs registered;
+    # application_commands is only filled once Discord has synced them
+    registered = list(getattr(bot, "pending_application_commands", None) or bot.application_commands)
+    for command, root, full_name in sorted(iter_slash_commands(registered), key=lambda t: t[2]):
         target = next((c for c in categories.values() if root.name in c["roots"]), other)
         entry = {"name": f"/{full_name}", "description": command.description or ""}
         target["admin_commands" if _is_admin_root(root) else "commands"].append(entry)
 
-    for command in bot.application_commands:
+    for command in registered:
         if isinstance(command, discord.MessageCommand):
             menus["commands"].append({"name": command.name, "description": "Message context menu"})
 

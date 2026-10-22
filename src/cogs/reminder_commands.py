@@ -24,6 +24,10 @@ class ReminderCommands(commands.Cog):
             "ai_horde": ai_horde_client
         }
 
+    async def resolve_when(self, when: str, channel_id: str, user=None) -> Optional[datetime]:
+        """Parses a natural-language time into a future server-local datetime (or None)."""
+        return await self.parse_time_with_ai(when, channel_id)
+
     async def parse_time_with_ai(self, time_str: str, channel_id: str) -> Optional[datetime]:
         """
         Uses AI to parse natural language time into a datetime object.

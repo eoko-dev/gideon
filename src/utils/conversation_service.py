@@ -395,6 +395,21 @@ class ConversationService:
         """Posts a failure as a short, user-facing message (never recorded)."""
         await conversation.channel.send(f"⚠️ {result.error or llm_result.friendly_error(llm_result.PROVIDER)}")
 
+    async def utility_chat(self, prompt: str, *, system: str, channel_id: str, author,
+                           feature: str) -> ChatResult:
+        """A one-off completion on the utility model (catch-ups, translations).
+
+        Checks the author's daily budget and attributes usage to them.
+        """
+        limit_error = self._budget_error(author)
+        if limit_error:
+            return ChatResult(error=limit_error, error_kind=llm_result.BUDGET)
+        provider, model_name = self.state.resolve_utility_model(channel_id)
+        client = self.clients.get(provider)
+        with usage_scope(feature, user_id=getattr(author, "id", None), channel_id=channel_id):
+            return await call_chat(client, messages=[{"role": "user", "content": prompt}],
+                                   model=model_name, system_prompt=system)
+
     # ─── The whole turn ─────────────────────────────────────────────────────
 
     async def respond(self, request: ReplyRequest) -> ChatResult:

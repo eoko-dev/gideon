@@ -92,6 +92,7 @@ COGS = [
     "src.cogs.help_commands",           # Interactive help system
     "src.cogs.dashboard_commands",      # Web admin dashboard
     "src.cogs.persona_commands",        # Per-channel personas with webhooks
+    "src.cogs.context_menu_commands",   # /catchup + message context menus
 ]
 
 # These cogs provide slash commands that duplicate dashboard functionality.
