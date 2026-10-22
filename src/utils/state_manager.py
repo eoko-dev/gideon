@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import logging
+import sqlite3
 import asyncio # Keep for potential async operations like model validation
 
 import discord
@@ -9,6 +10,8 @@ import discord
 # Import the new DatabaseManager
 from .database import DatabaseManager
 from . import user_memory
+from .llm_formatting import PROMPT_CACHE_BREAK
+from .timeutil import now_local
 # Keep config import for default values if DB is empty
 from ..config import (
     DEFAULT_MODEL as CONFIG_DEFAULT_MODEL,
@@ -46,6 +49,17 @@ CONFIG_KEY_MEMORY_SUMMARY_ENABLED = "memory_summary_enabled"
 CONFIG_KEY_MAX_MEMORY_SUMMARIES = "max_memory_summaries"
 CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
+CONFIG_KEY_RESPOND_TO_EVERYONE = "respond_to_everyone"
+CONFIG_KEY_ALLOW_EVERYONE_PINGS = "allow_everyone_pings"
+CONFIG_KEY_STREAM_REPLIES = "stream_replies"
+CONFIG_KEY_MAX_UNPROMPTED_POSTS = "max_unprompted_posts_per_hour"
+CONFIG_KEY_WELCOME_ENABLED = "welcome_enabled"
+CONFIG_KEY_WELCOME_CHANNEL = "welcome_channel_id"
+CONFIG_KEY_WELCOME_NOTE = "welcome_note"
+CONFIG_KEY_UTILITY_MODEL = "utility_model"
+CONFIG_KEY_DAILY_COST_BUDGET = "daily_user_cost_budget"
+CONFIG_KEY_DAILY_IMAGE_LIMIT = "daily_user_image_limit"
+CONFIG_KEY_DAILY_VIDEO_LIMIT = "daily_user_video_limit"
 
 class BotStateManager:
     """Singleton class to manage shared state via DatabaseManager."""
@@ -68,8 +82,15 @@ class BotStateManager:
             return
 
         logger.info(f"Initializing BotStateManager instance with id: {id(self)}")
-        self.db_manager = DatabaseManager() # Initialize DB connection and schema
-        self.model_manager = None # Placeholder for ModelManager instance
+        if getattr(self, 'db_manager', None) is None or getattr(self.db_manager, '_conn', None) is None:
+            self.db_manager = DatabaseManager() # Initialize DB connection and schema
+        else:
+            # Reinitializing (after a restore or config import): keep the same
+            # connection, which other services hold, and migrate the schema
+            # forward in case an older backup was restored
+            self.db_manager.run_migrations()
+        if not hasattr(self, 'model_manager'):
+            self.model_manager = None # Placeholder for ModelManager instance
 
         # Load configuration from DB or set defaults
         self.max_channel_history = await self._load_or_set_config(CONFIG_KEY_MAX_HISTORY, 35, 'int')
@@ -90,6 +111,30 @@ class BotStateManager:
         self.memory_summary_enabled = await self._load_or_set_config(CONFIG_KEY_MEMORY_SUMMARY_ENABLED, True, 'bool')
         self.max_memory_summaries = await self._load_or_set_config(CONFIG_KEY_MAX_MEMORY_SUMMARIES, 10, 'int')
         self.user_memory_enabled = await self._load_or_set_config(CONFIG_KEY_USER_MEMORY_ENABLED, True, 'bool')
+
+        # Whether @everyone/@here counts as mentioning Gideon (per-channel override in CHANNEL_CONFIG)
+        self.respond_to_everyone = await self._load_or_set_config(CONFIG_KEY_RESPOND_TO_EVERYONE, True, 'bool')
+        # Whether Gideon's own replies may ping @everyone/@here (per-channel override in CHANNEL_CONFIG)
+        self.allow_everyone_pings = await self._load_or_set_config(CONFIG_KEY_ALLOW_EVERYONE_PINGS, False, 'bool')
+
+        # Unprompted posts (reminders, RSVP nudges, welcomes) per channel per hour; 0 = no limit
+        self.max_unprompted_posts_per_hour = await self._load_or_set_config(CONFIG_KEY_MAX_UNPROMPTED_POSTS, 6, 'int')
+        # Welcoming new members (needs MEMBERS_INTENT=TRUE)
+        self.welcome_enabled = await self._load_or_set_config(CONFIG_KEY_WELCOME_ENABLED, False, 'bool')
+        self.welcome_channel_id = await self._load_or_set_config(CONFIG_KEY_WELCOME_CHANNEL, None, 'string')
+        self.welcome_note = await self._load_or_set_config(CONFIG_KEY_WELCOME_NOTE, None, 'string')
+
+        # Show replies as they're generated (paced message edits)
+        self.stream_replies = await self._load_or_set_config(CONFIG_KEY_STREAM_REPLIES, True, 'bool')
+
+        # Cheap model for background work (summaries, notes, time parsing);
+        # None means "use the channel's own model"
+        self.utility_model = await self._load_or_set_config(CONFIG_KEY_UTILITY_MODEL, None, 'string')
+
+        # Per-user daily limits (0 = unlimited). Admins are exempt.
+        self.daily_user_cost_budget = await self._load_or_set_config(CONFIG_KEY_DAILY_COST_BUDGET, 0.0, 'float')
+        self.daily_user_image_limit = await self._load_or_set_config(CONFIG_KEY_DAILY_IMAGE_LIMIT, 25, 'int')
+        self.daily_user_video_limit = await self._load_or_set_config(CONFIG_KEY_DAILY_VIDEO_LIMIT, 3, 'int')
 
         self._initialized = True
         logger.info("BotStateManager initialized successfully.")
@@ -218,6 +263,55 @@ class BotStateManager:
         self.user_memory_enabled = value
         await self._save_config(CONFIG_KEY_USER_MEMORY_ENABLED, value, 'bool')
 
+    # --- Utility model & usage limits ---
+
+    def get_utility_model(self) -> Optional[str]:
+        """The provider/model used for background work, or None to use the channel's model."""
+        return self.utility_model or None
+
+    async def set_utility_model(self, value: Optional[str]):
+        self.utility_model = (value or "").strip() or None
+        await self._save_config(CONFIG_KEY_UTILITY_MODEL, self.utility_model, 'string')
+
+    def resolve_utility_model(self, channel_id: Optional[str] = None) -> tuple:
+        """(provider, model_name) for background LLM work.
+
+        The configured utility model wins; otherwise the channel's model (or the
+        global model when there is no channel) is used, as before.
+        """
+        utility = self.get_utility_model()
+        if utility and "/" in utility:
+            provider, name = utility.split("/", 1)
+            return provider, name
+        if channel_id is not None:
+            return self.resolve_model(channel_id)
+        model = self.get_global_model()
+        if "/" in model:
+            provider, name = model.split("/", 1)
+            return provider, name
+        return self.global_provider, model
+
+    def get_daily_user_cost_budget(self) -> float:
+        return float(self.daily_user_cost_budget or 0)
+
+    async def set_daily_user_cost_budget(self, value: float):
+        self.daily_user_cost_budget = float(value)
+        await self._save_config(CONFIG_KEY_DAILY_COST_BUDGET, self.daily_user_cost_budget, 'float')
+
+    def get_daily_user_image_limit(self) -> int:
+        return int(self.daily_user_image_limit or 0)
+
+    async def set_daily_user_image_limit(self, value: int):
+        self.daily_user_image_limit = int(value)
+        await self._save_config(CONFIG_KEY_DAILY_IMAGE_LIMIT, self.daily_user_image_limit, 'int')
+
+    def get_daily_user_video_limit(self) -> int:
+        return int(self.daily_user_video_limit or 0)
+
+    async def set_daily_user_video_limit(self, value: int):
+        self.daily_user_video_limit = int(value)
+        await self._save_config(CONFIG_KEY_DAILY_VIDEO_LIMIT, self.daily_user_video_limit, 'int')
+
     def get_effective_session_timeout(self, channel_id: str) -> int:
         """Returns channel override if set, otherwise the global value."""
         val = self._get_channel_memory_config(channel_id, 'session_timeout_hours')
@@ -245,6 +339,75 @@ class BotStateManager:
             return bool(int(val))
         return self.user_memory_enabled
 
+    def get_max_unprompted_posts_per_hour(self) -> int:
+        return int(self.max_unprompted_posts_per_hour or 0)
+
+    async def set_max_unprompted_posts_per_hour(self, value: int):
+        self.max_unprompted_posts_per_hour = int(value)
+        await self._save_config(CONFIG_KEY_MAX_UNPROMPTED_POSTS, self.max_unprompted_posts_per_hour, 'int')
+
+    def get_welcome_enabled(self) -> bool:
+        return bool(self.welcome_enabled)
+
+    async def set_welcome_enabled(self, value: bool):
+        self.welcome_enabled = bool(value)
+        await self._save_config(CONFIG_KEY_WELCOME_ENABLED, self.welcome_enabled, 'bool')
+
+    def get_welcome_channel_id(self) -> Optional[str]:
+        return self.welcome_channel_id or None
+
+    async def set_welcome_channel_id(self, value: Optional[str]):
+        self.welcome_channel_id = (str(value).strip() if value else None) or None
+        await self._save_config(CONFIG_KEY_WELCOME_CHANNEL, self.welcome_channel_id, 'string')
+
+    def get_welcome_note(self) -> Optional[str]:
+        return self.welcome_note or None
+
+    async def set_welcome_note(self, value: Optional[str]):
+        self.welcome_note = (value or "").strip() or None
+        await self._save_config(CONFIG_KEY_WELCOME_NOTE, self.welcome_note, 'string')
+
+    def get_stream_replies(self) -> bool:
+        return bool(self.stream_replies)
+
+    async def set_stream_replies(self, value: bool):
+        self.stream_replies = bool(value)
+        await self._save_config(CONFIG_KEY_STREAM_REPLIES, self.stream_replies, 'bool')
+
+    def get_respond_to_everyone(self) -> bool:
+        return bool(self.respond_to_everyone)
+
+    async def set_respond_to_everyone(self, value: bool):
+        self.respond_to_everyone = bool(value)
+        await self._save_config(CONFIG_KEY_RESPOND_TO_EVERYONE, self.respond_to_everyone, 'bool')
+
+    def get_effective_respond_to_everyone(self, channel_id: str) -> bool:
+        """Whether @everyone/@here pings Gideon here: channel override, else global.
+
+        A thread follows its parent channel's setting.
+        """
+        val = self._get_channel_memory_config(self.get_memory_scope(channel_id), 'respond_to_everyone')
+        if val is not None:
+            return bool(int(val))
+        return self.get_respond_to_everyone()
+
+    def get_allow_everyone_pings(self) -> bool:
+        return bool(self.allow_everyone_pings)
+
+    async def set_allow_everyone_pings(self, value: bool):
+        self.allow_everyone_pings = bool(value)
+        await self._save_config(CONFIG_KEY_ALLOW_EVERYONE_PINGS, self.allow_everyone_pings, 'bool')
+
+    def get_effective_allow_everyone_pings(self, channel_id: str) -> bool:
+        """Whether Gideon's replies may ping @everyone/@here here: channel override, else global.
+
+        A thread follows its parent channel's setting.
+        """
+        val = self._get_channel_memory_config(self.get_memory_scope(channel_id), 'allow_everyone_pings')
+        if val is not None:
+            return bool(int(val))
+        return self.get_allow_everyone_pings()
+
     def _get_channel_memory_config(self, channel_id: str, column: str):
         """Reads a single memory config column from CHANNEL_CONFIG, returns None if not set."""
         import sqlite3
@@ -261,8 +424,9 @@ class BotStateManager:
             return None
 
     _CHANNEL_MEMORY_FIELDS = ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
-                              'user_memory_enabled')
-    _CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled')
+                              'user_memory_enabled', 'respond_to_everyone', 'allow_everyone_pings')
+    _CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone',
+                                   'allow_everyone_pings')
 
     def set_channel_memory_config(self, channel_id: str, **overrides):
         """Updates the given per-channel memory overrides; a value of None clears it (falls back to global)."""
@@ -300,7 +464,9 @@ class BotStateManager:
                  SET session_timeout_hours = NULL,
                      memory_summary_enabled = NULL,
                      max_memory_summaries = NULL,
-                     user_memory_enabled = NULL
+                     user_memory_enabled = NULL,
+                     respond_to_everyone = NULL,
+                     allow_everyone_pings = NULL
                  WHERE channel_id = ?;"""
         try:
             with self.db_manager._conn:
@@ -546,47 +712,55 @@ class BotStateManager:
 
     # --- Discord Thread Methods ---
 
-    async def add_discord_thread(self, thread_id: str, channel_id: str, name: str):
+    async def add_discord_thread(self, thread_id: str, channel_id: str, name: str,
+                                 creator_id: Optional[str] = None):
         """Adds a thread record to the database."""
         # Database call is synchronous
         self.db_manager.add_thread(
             thread_id=str(thread_id),
             channel_id=str(channel_id),
             name=name,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            creator_id=str(creator_id) if creator_id else None,
         )
 
-    async def add_discord_thread_message(self, thread_id: str, message: Dict[str, Any]):
-        """Adds a message associated with a thread to the database."""
+    async def add_discord_thread_message(self, thread_id: str, message: Dict[str, Any]) -> Optional[datetime]:
+        """Adds a message associated with a thread to the database.
+
+        Returns the timestamp the row was stored with, or None if it was skipped.
+        """
         role = message.get("role")
         content = message.get("content")
-        user_id = message.get("user_id")
-        user_name = message.get("name")
         timestamp = datetime.now()
 
         if not role or not content:
              logger.error(f"Thread message missing role or content: {message}")
-             return
+             return None
 
-        # Database call is synchronous
-        self.db_manager.add_message(
+        # The DB call is synchronous — run it off the event loop
+        await asyncio.to_thread(
+            self.db_manager.add_message,
             role=role,
             content=content,
             timestamp=timestamp,
             thread_id=str(thread_id),
-            user_id=user_id,
-            user_name=user_name,
+            user_id=message.get("user_id"),
+            user_name=message.get("name"),
             is_bot=bool(message.get("is_bot"))
         )
+        return timestamp
 
     def get_discord_thread_history(self, thread_id: str, limit: Optional[int] = None,
-                                   hours_limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Gets message history for a Discord thread from the database."""
-        # Use configured history limit? Or a different limit for threads?
-        # Let's use max_channel_history for now, can be adjusted.
+                                   hours_limit: Optional[int] = None,
+                                   until: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Gets message history for a Discord thread from the database.
+
+        Pass ``until`` (the timestamp returned by add_discord_thread_message) to
+        exclude messages recorded after the one being answered.
+        """
         effective_limit = limit if limit is not None else self.max_channel_history
         return self.db_manager.get_thread_history(str(thread_id), limit=effective_limit,
-                                                  hours_limit=hours_limit)
+                                                  hours_limit=hours_limit, until=until)
 
     def get_discord_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Gets thread data by Discord thread ID from the database."""
@@ -935,7 +1109,8 @@ class BotStateManager:
     def get_effective_system_prompt(self, channel_id: str, query: Optional[str] = None,
                                     speaker_id: Optional[str] = None,
                                     history: Optional[List[Dict[str, Any]]] = None,
-                                    base_prompt: Optional[str] = None) -> str:
+                                    base_prompt: Optional[str] = None,
+                                    location_id: Optional[str] = None) -> str:
         """Gets the effective system prompt: Persona > Channel Config > Global.
 
         The multi-user framing is always appended so the model knows how user
@@ -948,6 +1123,12 @@ class BotStateManager:
         added, plus short notes for other people speaking in `history` (the
         context the model will see). `base_prompt` replaces the persona /
         channel / global prompt, e.g. for a thread's own system prompt.
+
+        A short context block (date and time, server, channel or thread
+        `location_id`, persona name) is always added. Everything that changes
+        from message to message — the context block, memory search hits and
+        people notes — comes after PROMPT_CACHE_BREAK, so providers can cache
+        the stable prefix (clients split on the marker, see llm_formatting).
         """
         if not base_prompt:
             persona = self.get_effective_persona(channel_id)
@@ -962,18 +1143,64 @@ class BotStateManager:
         if not base_prompt:
             base_prompt = CONFIG_SYSTEM_PROMPT
 
-        sections = [base_prompt, MULTI_USER_FRAMING]
+        stable = [base_prompt, MULTI_USER_FRAMING]
+        recent_block, related_block = self._build_memory_blocks(channel_id, query=query)
+        if recent_block:
+            stable.append(recent_block)
 
-        memory_block = self._build_memory_context(channel_id, query=query)
-        if memory_block:
-            sections.append(memory_block)
-
+        volatile = [self._build_context_block(channel_id, location_id)]
+        if related_block:
+            volatile.append(related_block)
         if speaker_id:
             people_block = self._build_user_memory_context(channel_id, str(speaker_id), history)
             if people_block:
-                sections.append(people_block)
+                volatile.append(people_block)
 
-        return "\n\n".join(sections)
+        volatile = [section for section in volatile if section]
+        return "\n\n".join(stable) + (PROMPT_CACHE_BREAK + "\n\n".join(volatile) if volatile else "")
+
+    def _build_context_block(self, channel_id: str, location_id: Optional[str] = None) -> str:
+        """Date/time, server, channel and persona the model is speaking in."""
+        try:
+            now = now_local()
+            lines = ["--- Context ---",
+                     f"Current date and time: {now.strftime('%A, %B %d, %Y, %I:%M %p').replace(' 0', ' ')} "
+                     f"({now.tzinfo})"]
+            channel = self._resolve_channel(location_id or channel_id)
+            if channel is not None:
+                guild = getattr(channel, "guild", None)
+                if guild is not None and getattr(guild, "name", None):
+                    lines.append(f"Server: {guild.name}")
+                if isinstance(channel, discord.Thread):
+                    parent = getattr(channel, "parent", None)
+                    where = f"thread \"{channel.name}\""
+                    if parent is not None and getattr(parent, "name", None):
+                        where += f" in #{parent.name}"
+                    lines.append(f"Channel: {where}")
+                    topic = getattr(parent, "topic", None)
+                elif getattr(channel, "name", None):
+                    lines.append(f"Channel: #{channel.name}")
+                    topic = getattr(channel, "topic", None)
+                else:
+                    topic = None
+                if topic:
+                    lines.append(f"Channel topic: {str(topic)[:300]}")
+            persona = self.get_effective_persona(channel_id)
+            if persona and persona.get('display_name'):
+                lines.append(f"You are speaking here as \"{persona['display_name']}\".")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error building context block for channel {channel_id}: {e}", exc_info=True)
+            return ""
+
+    def _resolve_channel(self, channel_id: Optional[str]):
+        resolver = getattr(self, '_channel_resolver', None)
+        if resolver is None or not channel_id:
+            return None
+        try:
+            return resolver(int(channel_id))
+        except (TypeError, ValueError):
+            return None
 
     def _build_user_memory_context(self, channel_id: str, speaker_id: str,
                                    history: Optional[List[Dict[str, Any]]]) -> str:
@@ -997,37 +1224,51 @@ class BotStateManager:
         return self.db_manager.search_channel_memories(str(channel_id), query, limit)
 
     def _build_memory_context(self, channel_id: str, query: Optional[str] = None) -> str:
-        """Builds a memory block from recent summaries plus FTS matches for the query."""
-        try:
-            # Recent summaries always ride along (capped), FTS retrieval pulls
-            # in older-but-relevant ones for the current message.
-            recent_limit = min(self.get_effective_max_memory_summaries(channel_id), 3)
-            memories = self.get_channel_memories(channel_id, limit=recent_limit)
-            seen_ids = {m.get("id") for m in memories}
+        """The channel memory as one block (recent summaries plus FTS matches)."""
+        return "\n\n".join(block for block in self._build_memory_blocks(channel_id, query) if block)
 
+    def _build_memory_blocks(self, channel_id: str, query: Optional[str] = None):
+        """Returns (recent summaries block, related-to-this-message block).
+
+        Recent summaries only change when a session is archived, so they sit
+        in the cacheable part of the prompt; FTS matches for the current
+        message change every turn.
+        """
+        try:
+            recent_limit = min(self.get_effective_max_memory_summaries(channel_id), 3)
+            recent = self.get_channel_memories(channel_id, limit=recent_limit)
+            seen_ids = {m.get("id") for m in recent}
+            related = []
             if query:
                 for match in self.search_channel_memories(channel_id, query, limit=3):
                     if match.get("id") not in seen_ids:
-                        memories.append(match)
+                        related.append(match)
                         seen_ids.add(match.get("id"))
 
-            if not memories:
-                return ""
-
-            lines = ["--- Channel Memory ---",
-                     "Here is what I remember from previous conversations in this channel:"]
-            for mem in memories:
-                # Prefer conversation_start (when the chat happened) over created_at (when summary was stored)
-                ts = mem.get("conversation_start") or mem.get("created_at", "")
-                if hasattr(ts, "strftime"):
-                    ts_str = ts.strftime("%Y-%m-%d")
-                else:
-                    ts_str = str(ts)[:10]
-                lines.append(f"[{ts_str}]: {mem['summary']}")
-            return "\n".join(lines)
+            recent_block = ""
+            if recent:
+                recent_block = "\n".join(
+                    ["--- Channel Memory ---",
+                     "Here is what I remember from previous conversations in this channel. When you "
+                     "draw on one, say roughly when it was (e.g. \"back on Oct 3\"):"]
+                    + [self._format_memory_line(m) for m in recent])
+            related_block = ""
+            if related:
+                related_block = "\n".join(
+                    ["--- Related Channel Memory ---",
+                     "Older conversations in this channel that relate to the current message:"]
+                    + [self._format_memory_line(m) for m in related])
+            return recent_block, related_block
         except Exception as e:
             logger.error(f"Error building memory context for channel {channel_id}: {e}", exc_info=True)
-            return ""
+            return "", ""
+
+    @staticmethod
+    def _format_memory_line(mem: Dict[str, Any]) -> str:
+        # Prefer conversation_start (when the chat happened) over created_at (when stored)
+        ts = mem.get("conversation_start") or mem.get("created_at", "")
+        ts_str = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10]
+        return f"[{ts_str}]: {mem['summary']}"
 
     def get_effective_provider(self, channel_id: str) -> str:
         """Gets the effective provider: Persona > Channel Config > Global."""
@@ -1206,14 +1447,50 @@ class BotStateManager:
     # --- Reminder Methods (Delegation) ---
 
     def add_reminder(self, user_id: str, channel_id: str, message: str,
-                     due_timestamp: datetime) -> int:
-        """Adds a reminder to the database."""
+                     due_timestamp: datetime, recurrence: Optional[str] = None,
+                     deliver_dm: bool = False, timezone: Optional[str] = None) -> int:
+        """Adds a reminder (due_timestamp is naive server-local; recurrence is an RRULE)."""
         return self.db_manager.add_reminder(
             user_id=str(user_id),
             channel_id=str(channel_id),
             message=message,
-            due_timestamp=due_timestamp
+            due_timestamp=due_timestamp,
+            recurrence=recurrence,
+            deliver_dm=deliver_dm,
+            timezone=timezone,
         )
+
+    def get_reminder(self, reminder_id: int) -> Optional[Dict[str, Any]]:
+        return self.db_manager.reminders.get_reminder(int(reminder_id))
+
+    def reschedule_reminder(self, reminder_id: int, due_timestamp: datetime) -> bool:
+        return self.db_manager.reminders.reschedule(int(reminder_id), due_timestamp)
+
+    # --- Per-user timezone (USERS.preferences_json) ---
+
+    def get_user_timezone_name(self, user_id: str) -> Optional[str]:
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        return prefs.get('timezone') or None
+
+    def get_user_timezone(self, user_id: str):
+        """The user's ZoneInfo, or the server timezone if they haven't set one."""
+        from .time_parse import resolve_timezone
+        from .timeutil import local_tz
+        return resolve_timezone(self.get_user_timezone_name(user_id)) or local_tz()
+
+    def set_user_timezone(self, user_id: str, name: Optional[str]) -> Optional[str]:
+        """Stores a timezone (canonical IANA name) or clears it with None. Raises ValueError if unknown."""
+        from .time_parse import resolve_timezone
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        if name:
+            zone = resolve_timezone(name)
+            if zone is None:
+                raise ValueError(f"Unknown timezone '{name}'. Use a name like America/Chicago or Europe/London.")
+            prefs['timezone'] = str(zone)
+        else:
+            prefs.pop('timezone', None)
+        self.db_manager.set_user_preferences(str(user_id), prefs)
+        return prefs.get('timezone')
 
     def get_due_reminders(self, current_time: datetime) -> List[Dict[str, Any]]:
         """Gets reminders that are due."""

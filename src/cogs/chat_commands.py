@@ -1,20 +1,16 @@
 """Core chat commands for the AI assistant."""
 import discord
-import asyncio
-import socket
 import re  # Add this import here
 import logging
 from discord.ext import commands
-from ..utils.state_manager import BotStateManager
-from ..utils.memory_service import check_and_rotate_session, schedule_compaction
-from ..utils.discord_fmt import chunk_message
-from ..utils.llm_formatting import collect_mention_targets, apply_outbound_mentions
+from ..utils.conversation_service import Conversation, ConversationService, MessageLike, ReplyRequest
+from ..utils.llm_result import call_chat
+from ..utils.memory_service import llm_clients
+from ..utils.usage import usage_scope
+from ..utils.permissions import has_channel_permission
 # Changed to absolute import: from ..utils.conversation import get_channel_context
 # Removed import for conversation, now handled by state_manager
-from ..utils.openrouter_client import OpenRouterClient
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..config import OPENROUTER_API_KEY, SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
-from datetime import datetime
 
 # Set up logging
 logger = logging.getLogger('chat_commands')
@@ -27,24 +23,12 @@ class ChatCommands(commands.Cog):
         self.bot = bot
         # Use the shared state manager from the bot instance
         self.state = bot.state_manager
-        # Store references to all provider clients
-        self.clients = {
-            "openrouter": openrouter_client,
-            "openai": openai_client,
-            "ai_horde": ai_horde_client
-        }
-        # Keep a direct reference for potential backward compatibility or specific uses
-        self.openrouter_client = openrouter_client
-        # TODO: Consider if openai_client and ai_horde_client need direct references too
+        self.service = getattr(bot, 'conversation_service', None) or ConversationService(bot)
 
-    async def check_internet_connection(self):
-        """Check if the bot has an internet connection."""
-        try:
-            # Try to resolve a well-known domain
-            await asyncio.get_event_loop().getaddrinfo('google.com', 443)
-            return True
-        except socket.gaierror:
-            return False
+    @property
+    def clients(self):
+        """Provider clients, read live so dashboard key rotation applies."""
+        return llm_clients(self.bot)
 
     def get_model_for_channel(self, channel_id):
         """Get the appropriate model for this channel"""
@@ -128,15 +112,15 @@ class ChatCommands(commands.Cog):
         model_lower = str(model_name).lower()
 
         # More detailed logging about the model name
-        print(f"Checking citation model: '{model_name}' (lower: '{model_lower}')")
+        logger.debug(f"Checking citation model: '{model_name}' (lower: '{model_lower}')")
 
         # Check if model contains any of the citation identifiers
         for identifier in citation_identifiers:
             if identifier in model_lower:
-                print(f"✅ Model '{model_name}' identified as citation-based (matches '{identifier}')")
+                logger.debug(f"✅ Model '{model_name}' identified as citation-based (matches '{identifier}')")
                 return True
 
-        print(f"❌ Model '{model_name}' is NOT identified as citation-based")
+        logger.debug(f"❌ Model '{model_name}' is NOT identified as citation-based")
         return False
 
     def should_format_citations(self, model_name, response_text):
@@ -151,11 +135,10 @@ class ChatCommands(commands.Cog):
         Returns:
             bool: True if the response should be formatted for citations
         """
-        import re
 
         # Explicitly check for Sonar first
         if "sonar" in str(model_name).lower() or "perplexity" in str(model_name).lower():
-            print(f"✅ Direct match for Sonar/Perplexity model: {model_name}")
+            logger.debug(f"✅ Direct match for Sonar/Perplexity model: {model_name}")
             return True
 
         # More robust pattern to detect footnote-style citations
@@ -171,17 +154,17 @@ class ChatCommands(commands.Cog):
         is_citation_model = self.is_citation_based_model(model_name)
 
         # Log detailed detection info
-        print(f"Citation detection for '{model_name}':")
-        print(f"- Is known citation model: {is_citation_model}")
-        print(f"- Has citation format: {has_citation_format}")
-        print(f"- Has reference section: {has_reference_section}")
+        logger.debug(f"Citation detection for '{model_name}':")
+        logger.debug(f"- Is known citation model: {is_citation_model}")
+        logger.debug(f"- Has citation format: {has_citation_format}")
+        logger.debug(f"- Has reference section: {has_reference_section}")
 
         # More permissive logic:
         # 1. It's a known citation model OR
         # 2. It has citation format OR
         # 3. It has a reference section
         should_format = is_citation_model or has_citation_format or has_reference_section
-        print(f"Citation formatting decision: {should_format}")
+        logger.debug(f"Citation formatting decision: {should_format}")
 
         return should_format
 
@@ -193,211 +176,50 @@ class ChatCommands(commands.Cog):
                          message: str,
                          image: discord.Attachment = None):
         await ctx.defer()
-        logger.info(f"[Chat Entry] Command invoked by {ctx.author.id} in channel {ctx.channel.id}") # ADDED LOG
-
-        # Check internet connection first
-        if not await self.check_internet_connection():
-            await ctx.respond("⚠️ Network issue: Unable to connect to the internet. Please check your connection and try again.")
-            return
-
-        # Get channel ID to track conversation per channel
         channel_id = str(ctx.channel.id)
+        logger.info(f"[Chat] /chat by {ctx.author.id} in channel {channel_id}")
 
-        # Determine which provider and model to use for this channel
-        model_id_full = self.get_model_for_channel(channel_id) # e.g., "openai/gpt-4o"
-        logger.info(f"[Chat Start] Channel {channel_id}: Effective model ID from state = '{model_id_full}'") # Enhanced log
+        # A thread keeps its own history and settings; anywhere else the
+        # channel is the conversation
+        if isinstance(ctx.channel, discord.Thread):
+            conversation = Conversation(channel=ctx.channel, channel_id=str(ctx.channel.parent_id),
+                                        thread_id=channel_id)
+        else:
+            conversation = Conversation(channel=ctx.channel, channel_id=channel_id)
 
-        # Parse provider and model name
-        provider, model_name = self.state.resolve_model(channel_id)
-        model_id_full = f"{provider}/{model_name}"
-
-        # Select the appropriate client
-        client_to_use = self.clients.get(provider)
-        logger.info(f"[Chat Client Select] Parsed Provider='{provider}', Model='{model_name}'. Found client object: {client_to_use is not None}") # Enhanced log
-
-        # Log which provider and model are being used
-        logger.info(f"Using provider '{provider}' and model '{model_name}' (resolved from '{model_id_full}') for channel {channel_id}")
-
-        # Process image if provided (vision check happens later)
-        images = []
-        image_embed = None
-
+        # Echo the prompt so the channel sees what was asked
+        echo = f"**{ctx.author.display_name}**: {message}"
         if image:
-            # Check if it's an image file
-            if any(image.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                # Create an embed to display the image
-                image_embed = discord.Embed(title="Analyzing Image", color=discord.Color.blue())
-                image_embed.set_image(url=image.url)
-                image_embed.add_field(name="File", value=image.filename)
-
-                # Check if the selected client and model support vision *before* downloading
-                client_supports_vision = False
-                if client_to_use and hasattr(client_to_use, 'model_supports_vision'):
-                    # Check if the specific model within the provider supports vision
-                    if asyncio.iscoroutinefunction(client_to_use.model_supports_vision):
-                        client_supports_vision = await client_to_use.model_supports_vision(model_name)
-                    else:
-                        client_supports_vision = client_to_use.model_supports_vision(model_name)
-                    logger.info(f"Client '{provider}' model '{model_name}' vision support: {client_supports_vision}")
-                else:
-                    logger.warning(f"Client for provider '{provider}' missing 'model_supports_vision' method.")
-
-                if client_supports_vision:
-                    try:
-                        # Download the image data only if supported
-                        image_data = await image.read()
-                        images.append({
-                            'data': image_data,
-                            'type': image.content_type or 'image/jpeg'  # Default to jpeg if not specified
-                        })
-                    except Exception as e:
-                        await ctx.respond(f"⚠️ Failed to process image {image.filename}: {str(e)}")
-                        return
-                elif client_to_use: # Only add warning if client exists but doesn't support vision
-                    image_embed.description = f"⚠️ Provider '{provider}' model '{model_name}' doesn't support image analysis."
-                # If client_to_use is None, the error will be handled later
-
-        # Check for session expiry and rotate if needed (before fetching history)
-        await check_and_rotate_session(channel_id, self.state, self.clients)
+            embed = discord.Embed(color=discord.Color.blue())
+            embed.set_image(url=image.url)
+            await ctx.respond(echo[:2000], embed=embed)
+        else:
+            await ctx.respond(echo[:2000])
 
         try:
-            # Get recent channel context from state manager
-            conversation_context = self.state.get_channel_history(channel_id)
-
-            # Get effective system prompt (persona > channel config > global, with
-            # memory summaries relevant to the current message and this channel's
-            # notes on the speaker and other participants injected)
-            channel_system_prompt = self.state.get_effective_system_prompt(
-                channel_id, query=message, speaker_id=str(ctx.author.id), history=conversation_context)
-
-            # Add this new message
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "user",
-                "name": ctx.author.display_name,
-                "user_id": str(ctx.author.id),
-                "content": message,
-                "timestamp": datetime.now()
-            })
-
-            # Compact oversized histories into a memory summary (in the
-            # background, so summarization never delays this reply)
-            schedule_compaction(channel_id, self.state, self.clients)
-
-            # Format the final query with the current user's question
-            conversation_context.append({
-                "role": "user",
-                "name": ctx.author.display_name,
-                "content": message
-            })
-
-            # First response - show the user's message
-            if image_embed:
-                await ctx.respond(f"**{ctx.author.display_name}**: {message}", embed=image_embed)
-            else:
-                # Show user's message (without processing note)
-                await ctx.respond(f"**{ctx.author.display_name}**: {message}")
-
-            # Always send a separate processing message that we'll edit
-            processing_msg = await ctx.followup.send("Processing response...")
-
-            # --- Select and Call Correct Client ---
-            logger.debug(f"Attempting to select client. Provider='{provider}', Client Object='{client_to_use}', Has Send Method='{hasattr(client_to_use, 'send_message_with_history') if client_to_use else 'N/A'}'") # DETAILED LOG
-            if client_to_use and hasattr(client_to_use, 'send_message_with_history'):
-                logger.info(f"✅ Calling send_message_with_history on client for provider '{provider}' ({type(client_to_use).__name__}) with model '{model_name}'") # DETAILED LOG
-                response = await client_to_use.send_message_with_history(
-                    messages=conversation_context,
-                    model=model_name, # Pass only the model name part
-                    system_prompt=channel_system_prompt,
-                    # Pass images only if an image was provided AND the selected client/model supports vision
-                    images=images if image and client_supports_vision else []
-                )
-            elif client_to_use:
-                 logger.error(f"❌ Client for provider '{provider}' exists but does not have 'send_message_with_history' method.") # DETAILED LOG
-                 response = f"⚠️ Error: Client for provider '{provider}' does not support chat ('send_message_with_history' missing)."
-            else:
-                 logger.error(f"❌ Client for provider '{provider}' not found or not initialized in self.clients.") # DETAILED LOG
-                 response = f"⚠️ Error: Client for provider '{provider}' not available or not initialized."
-            # --- End Client Call ---
-
-            # Check if response is an error
-            if response.startswith("⚠️"):
-                # If it's an error, don't split chunks and don't add to history
-                await processing_msg.edit(content=response)
-            else:
-                # Add assistant's response to history
-                await self.state.add_to_channel_history(channel_id, {
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": datetime.now()
-                })
-
-                # Debug logs using the actual model ID used
-                is_citation_model = self.is_citation_based_model(model_id_full) # Check full ID for citation patterns
-                has_citation_format = bool(re.search(r'\[\d+\]', response))
-                logger.debug(f"Model: {model_id_full}, Is citation model: {is_citation_model}, Has citation format: {has_citation_format}")
-
-                # Check if a persona is active for webhook-based sending
-                persona_active = (hasattr(self.bot, 'webhook_sender')
-                                  and self.bot.state_manager.get_effective_persona(channel_id))
-
-                # Format responses from models that use citations as paginated embeds
-                if self.should_format_citations(model_id_full, response):
-                    logger.info(f"Formatting response from {model_id_full} with citations")
-                    embeds = self.format_perplexity_response(response)
-
-                    if embeds:
-                        if persona_active:
-                            # Delete processing message, send all embeds via webhook
-                            await processing_msg.delete()
-                            for embed in embeds:
-                                await self.bot.webhook_sender.send_response(
-                                    ctx.channel, "", channel_id, embeds=[embed]
-                                )
-                        else:
-                            await processing_msg.edit(content=None, embed=embeds[0])
-                            for embed in embeds[1:]:
-                                await ctx.channel.send(embed=embed)
-                else:
-                    logger.info(f"Using standard formatting for model {model_id_full}")
-                    targets = collect_mention_targets(conversation_context, [ctx.author])
-                    chunks = chunk_message(apply_outbound_mentions(response, targets))
-
-                    if persona_active:
-                        # Delete processing message, send all chunks via webhook
-                        await processing_msg.delete()
-                        for chunk in chunks:
-                            await self.bot.webhook_sender.send_response(
-                                ctx.channel, chunk, channel_id
-                            )
-                    else:
-                        for i, chunk in enumerate(chunks):
-                            if i == 0:
-                                await processing_msg.edit(content=chunk)
-                            else:
-                                await ctx.channel.send(chunk)
-        # Correctly indented except block for the try starting at line 269
+            recorded_at = await self.service.record_user_turn(conversation, ctx.author, message)
+            await self.service.respond(ReplyRequest(
+                conversation=conversation,
+                author=ctx.author,
+                content=message,
+                message=MessageLike(ctx, message),
+                attachments=[image] if image else [],
+                history_until=recorded_at,
+                recorded=recorded_at is not None,
+                feature="chat",
+            ))
         except Exception as e:
             logger.exception(f"Error during chat processing for channel {channel_id}: {e}")
-            # Attempt to edit the processing message if it exists
-            try:
-                if processing_msg:
-                    await processing_msg.edit(content=f"⚠️ An unexpected error occurred: {str(e)}")
-                else:
-                    # If processing_msg doesn't exist for some reason, send a new message
-                    await ctx.followup.send(f"⚠️ An unexpected error occurred: {str(e)}")
-            except discord.NotFound:
-                 # If the processing message was deleted, send a new one
-                 await ctx.followup.send(f"⚠️ An unexpected error occurred: {str(e)}")
-            except Exception as followup_e:
-                 # Log if sending the error message itself fails
-                 logger.error(f"Failed to send error message to user: {followup_e}")
-        # Removed finally block that restored openrouter_client.model
+            await ctx.followup.send("⚠️ Something went wrong while I was answering. Please try again.")
 
     @discord.slash_command(
         name="reset",
         description="Reset the conversation history for this channel"
     )
     async def reset_slash(self, ctx):
+        if not has_channel_permission(ctx.author, ctx.channel, manage_channels=True):
+            await ctx.respond("⛔ You need **Manage Channels** to reset this channel's history.", ephemeral=True)
+            return
         channel_id = str(ctx.channel.id)
         # clear_channel_history now handles the DB deletion
         if self.state.clear_channel_history(channel_id):
@@ -590,17 +412,18 @@ class ChatCommands(commands.Cog):
             search_system_prompt = build_search_system_prompt(channel_system_prompt)
 
             # Send to the OpenRouter client (as only it supports web_search flag currently)
-            response = await client_to_use.send_message_with_history(
-                messages=[user_message],
-                model=model_name, # Pass only model name
-                system_prompt=search_system_prompt,
-                web_search=True # Enable web search
-            )
+            with usage_scope("search", user_id=ctx.author.id, channel_id=channel_id):
+                result = await call_chat(
+                    client_to_use,
+                    messages=[user_message],
+                    model=model_name, # Pass only model name
+                    system_prompt=search_system_prompt,
+                    web_search=True # Enable web search
+                )
+            response = result.text
 
-            # Check if response is an error
-            if response.startswith("⚠️"):
-                # If it's an error, don't format and just show the error
-                await processing_msg.edit(content=response)
+            if not result.ok:
+                await processing_msg.edit(content=f"⚠️ {result.error}")
             else:
                 # Format responses from models that use citations as paginated embeds
                 # Check if a persona is active for webhook-based sending
@@ -647,13 +470,8 @@ class ChatCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error in search command for provider '{provider}', model '{model_name}': {str(e)}", exc_info=True)
             # Edit the original message if possible
-            try:
-                await processing_msg.edit(content=f"⚠️ Error during search: {str(e)}")
-            except discord.NotFound:
-                 await ctx.followup.send(f"⚠️ Error during search: {str(e)}", ephemeral=True)
-            except Exception as edit_e:
-                 logger.error(f"Failed to edit processing message for search error: {edit_e}")
-                 await ctx.followup.send(f"⚠️ Error during search: {str(e)}", ephemeral=True)
+            await ctx.followup.send("⚠️ Something went wrong during the search. Please try again.",
+                                    ephemeral=True)
         # Removed finally block that restored openrouter_client.model
 
     @discord.slash_command(
@@ -662,6 +480,9 @@ class ChatCommands(commands.Cog):
     )
     async def setprovider_slash(self, ctx):
         """Set the AI provider for this channel with interactive selection."""
+        if not has_channel_permission(ctx.author, ctx.channel, manage_channels=True):
+            await ctx.respond("⛔ You need **Manage Channels** to change this channel's AI provider.", ephemeral=True)
+            return
         await ctx.defer(ephemeral=True)
 
         try:

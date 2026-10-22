@@ -220,6 +220,21 @@
                         </div>
                     </div>
 
+                    <div class="card" id="usage-card">
+                        <div class="card-header">
+                            <h2 class="card-title">Usage</h2>
+                            <div class="toolbar-actions">
+                                <label for="usage-days" class="sr-only">Period</label>
+                                <select id="usage-days">
+                                    <option value="1">Today</option>
+                                    <option value="7" selected>Last 7 days</option>
+                                    <option value="30">Last 30 days</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-body" id="usage-body"><span class="skeleton sk-row"></span></div>
+                    </div>
+
                     <div class="grid-2">
                         <div class="card">
                             <div class="card-header"><h2 class="card-title">Bot information</h2></div>
@@ -402,9 +417,107 @@
                                         <small class="field-hint">Maximum round-trips between tool calls and the LLM before forcing a text response.</small>
                                     </div>
                                 </div>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-respond-everyone">Answer @everyone / @here</label>
+                                        <select id="setting-respond-everyone">
+                                            <option value="true">Yes - a ping to everyone also pings Gideon</option>
+                                            <option value="false">No - only direct mentions and replies</option>
+                                        </select>
+                                        <small class="field-hint">Default for all channels. Each channel can override this in its settings.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-allow-everyone-pings">Let Gideon ping @everyone / @here</label>
+                                        <select id="setting-allow-everyone-pings">
+                                            <option value="false">No - @everyone in a reply is plain text</option>
+                                            <option value="true">Yes - for people who can ping everyone themselves</option>
+                                        </select>
+                                        <small class="field-hint">Default for all channels; each channel can override it. The bot also needs the Mention @everyone permission.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-stream-replies">Stream replies</label>
+                                        <select id="setting-stream-replies">
+                                            <option value="true">On - show replies as they're written</option>
+                                            <option value="false">Off - post each reply when it's finished</option>
+                                        </select>
+                                        <small class="field-hint">Streaming works with OpenRouter models; other providers always post finished replies.</small>
+                                    </div>
+                                </div>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save tool calling settings</button>
                                     <span id="tool-calling-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Community</h2></div>
+                        <div class="card-body">
+                            <form id="community-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-welcome-enabled">Welcome new members</label>
+                                        <select id="setting-welcome-enabled">
+                                            <option value="false">Off</option>
+                                            <option value="true">On</option>
+                                        </select>
+                                        <small class="field-hint" id="setting-welcome-hint">Needs MEMBERS_INTENT=TRUE in .env and the Server Members intent in the Discord Developer Portal.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-welcome-channel">Welcome channel ID</label>
+                                        <input type="text" id="setting-welcome-channel" inputmode="numeric" placeholder="Server's system channel" autocomplete="off">
+                                        <small class="field-hint">Leave empty to use the server's system messages channel.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-unprompted-limit">Unprompted posts per channel per hour</label>
+                                        <input type="number" id="setting-unprompted-limit" min="0" max="60" value="6">
+                                        <small class="field-hint">Reminders past this are combined into one message; extra welcomes are skipped. 0 = no limit.</small>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="setting-welcome-note">What newcomers should know</label>
+                                    <textarea id="setting-welcome-note" rows="3" maxlength="1000" placeholder="e.g. Read #rules first; game nights are Fridays."></textarea>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save community settings</button>
+                                    <span id="community-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title">Cost controls</h2></div>
+                        <div class="card-body">
+                            <form id="cost-controls-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-utility-model">Utility model</label>
+                                        <input type="text" id="setting-utility-model" placeholder="e.g. openrouter/google/gemini-2.5-flash-lite" autocomplete="off">
+                                        <small class="field-hint">Cheap model for background work: memory summaries, people notes and reminder time parsing. Leave empty to use each channel's own model.</small>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-cost-budget">Daily chat budget per user (USD)</label>
+                                        <input type="number" id="setting-cost-budget" min="0" max="1000" step="0.01" value="0">
+                                        <small class="field-hint">0 = unlimited. Server admins are exempt.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-image-limit">Images per user per day</label>
+                                        <input type="number" id="setting-image-limit" min="0" max="1000" value="25">
+                                        <small class="field-hint">0 = unlimited.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-video-limit">Videos per user per day</label>
+                                        <input type="number" id="setting-video-limit" min="0" max="1000" value="3">
+                                        <small class="field-hint">0 = unlimited.</small>
+                                    </div>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save cost controls</button>
+                                    <span id="cost-controls-save-status" class="save-status" role="status" aria-live="polite"></span>
                                 </div>
                             </form>
                         </div>
@@ -1123,6 +1236,30 @@
                                     <option value="false">Disabled</option>
                                 </select>
                                 <small class="field-hint" id="channel-user-memory-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-everyone">Answer @everyone / @here</label>
+                                    <span class="chip chip-source" data-source-for="respond_to_everyone" hidden></span>
+                                </div>
+                                <select id="channel-edit-everyone">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                                <small class="field-hint" id="channel-everyone-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-allow-pings">Gideon may ping @everyone</label>
+                                    <span class="chip chip-source" data-source-for="allow_everyone_pings" hidden></span>
+                                </div>
+                                <select id="channel-edit-allow-pings">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                                <small class="field-hint" id="channel-allow-pings-hint"></small>
                             </div>
                         </div>
                     </fieldset>

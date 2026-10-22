@@ -3,13 +3,18 @@ import discord
 import logging
 from discord.ext import commands
 from ..utils.discord_fmt import chunk_message
-from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
-from ..config import SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from ..utils.permissions import can_manage_ai_thread
+from ..utils.conversation_service import Conversation, ConversationService, MessageLike, ReplyRequest
+from ..utils.llm_formatting import describe_message
 
 # Create logger
 logger = logging.getLogger(__name__)
+
+
+def _replied_to(message):
+    """The message this one replies to, when Discord already resolved it."""
+    resolved = getattr(getattr(message, "reference", None), "resolved", None)
+    return resolved if isinstance(resolved, discord.Message) else None
 
 class ThreadCommands(commands.Cog):
     """Commands for managing AI conversation threads."""
@@ -19,7 +24,7 @@ class ThreadCommands(commands.Cog):
         # Use the shared state manager and client from the bot instance so
         # dashboard key rotation and config changes apply here too.
         self.state = bot.state_manager
-        self.openrouter_client = bot.openrouter_client
+        self.service = getattr(bot, 'conversation_service', None) or ConversationService(bot)
 
     # Create the thread command group as a class attribute
     thread = discord.SlashCommandGroup(
@@ -108,7 +113,8 @@ class ThreadCommands(commands.Cog):
             await self.state.add_discord_thread(
                 thread_id=thread_id,
                 channel_id=channel_id,
-                name=name
+                name=name,
+                creator_id=str(ctx.author.id),
                 # created_at is set in the state manager/database
             )
 
@@ -118,83 +124,20 @@ class ThreadCommands(commands.Cog):
 
             # If a message was provided, process it immediately in the new thread
             if message:
-                # Add user message to thread history in the database
-                await self.state.add_discord_thread_message(thread_id, {
-                    "role": "user",
-                    "name": ctx.author.display_name,
-                    "content": message,
-                    # timestamp is set in the state manager/database
-                    "user_id": str(ctx.author.id) # Store user ID
-                })
-
-                # Get thread-specific model (or channel/global default)
-                thread_config = self.state.get_discord_thread_config(thread_id)
-                thread_model = thread_config.get("model") if thread_config else None
-                model_to_use = thread_model if thread_model else self.get_model_for_channel(channel_id)
-
-                # Process image if provided
-                model_supports_images = await self.openrouter_client.model_supports_vision(model_to_use)
-                images = []
-
-                if image and model_supports_images:
-                    if any(image.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                        try:
-                            image_data = await image.read()
-                            images.append({
-                                'data': image_data,
-                                'type': image.content_type or 'image/jpeg'
-                            })
-                        except Exception as e:
-                            await thread.send(f"⚠️ Failed to process image {image.filename}: {str(e)}")
-                            # Continue without the image if processing fails
-
-                # Send thinking message in the thread
-                thinking_msg = await thread.send(f"**{ctx.author.display_name}**: {message}\n\n_Processing response..._")
-
-                # Get thread history for context (should only be the initial message for now)
-                # Use the getter method
-                conversation_context = self.state.get_discord_thread_history(thread_id)
-
-                # Thread-specific system prompt (or channel default), with the
-                # parent channel's memory and notes on the people in the thread
-                thread_system_prompt = self.state.get_effective_system_prompt(
-                    channel_id, speaker_id=str(ctx.author.id), history=conversation_context,
-                    base_prompt=thread_config.get("system_prompt") if thread_config else None)
-
-                # Temporarily set the model for this request
-                current_model = self.openrouter_client.model
-                self.openrouter_client.model = model_to_use
-
-                try:
-                    # Get response from AI
-                    response = await self.openrouter_client.send_message_with_history(
-                        conversation_context,
-                        images=images if model_supports_images else [],
-                        system_prompt=thread_system_prompt
-                    )
-
-                    # Add AI response to thread history in the database
-                    await self.state.add_discord_thread_message(thread_id, {
-                        "role": "assistant",
-                        "content": response,
-                        # timestamp is set in the state manager/database
-                    })
-
-                    # Split response into chunks
-                    chunks = chunk_message(response)
-
-                    # Update thinking message with first chunk
-                    await thinking_msg.edit(content=chunks[0])
-
-                    # Send remaining chunks
-                    for chunk in chunks[1:]:
-                        await thread.send(chunk)
-
-                    # Update the success message
-                    success_msg = f"✅ Created new thread: **{name}** with your initial message. Check the thread for the AI's response!"
-                finally:
-                    # Restore original model
-                    self.openrouter_client.model = current_model
+                conversation = Conversation(channel=thread, channel_id=channel_id, thread_id=thread_id)
+                await thread.send(f"**{ctx.author.display_name}**: {message}"[:2000])
+                recorded_at = await self.service.record_user_turn(conversation, ctx.author, message)
+                await self.service.respond(ReplyRequest(
+                    conversation=conversation,
+                    author=ctx.author,
+                    content=message,
+                    message=MessageLike(ctx, message),
+                    attachments=[image] if image else [],
+                    history_until=recorded_at,
+                    recorded=recorded_at is not None,
+                    feature="thread",
+                ))
+                success_msg = f"✅ Created new thread: **{name}** with your initial message. Check the thread for the AI's response!"
             else:
                 # Just confirm thread creation
                 success_msg = f"✅ Created new thread: **{name}**\nThe thread is now ready for conversation. All messages in the thread will receive AI responses."
@@ -236,114 +179,32 @@ class ThreadCommands(commands.Cog):
             await ctx.respond("⚠️ Run this from the thread or its parent channel.", ephemeral=True)
             return
 
-        # Get thread-specific model and system prompt from DB
-        thread_config = self.state.get_discord_thread_config(thread_id)
-        thread_model = thread_config.get("model") if thread_config else None
-        thread_system_prompt = thread_config.get("system_prompt") if thread_config else None
+        conversation = Conversation(channel=ctx.channel, channel_id=str(channel_id),
+                                    thread_id=str(thread_id))
 
-        # Set model for this request (thread-specific > channel-specific > global)
-        current_model = self.openrouter_client.model
-        model_to_use = thread_model if thread_model else self.get_model_for_channel(channel_id)
-        self.openrouter_client.model = model_to_use
-
-        # Handle image processing
-        model_supports_images = await self.openrouter_client.model_supports_vision(model_to_use)
-        images = []
-        image_embed = None
-
+        echo = f"**{ctx.author.display_name}** in **{thread_name}**: {message}"
         if image:
-            # Check if it's an image file
-            if any(image.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                # Create an embed to display the image
-                image_embed = discord.Embed(title=f"Analyzing Image in Thread: {thread_name}", color=discord.Color.blue())
-                image_embed.set_image(url=image.url)
-                image_embed.add_field(name="File", value=image.filename)
-
-                if model_supports_images:
-                    try:
-                        image_data = await image.read()
-                        images.append({
-                            'data': image_data,
-                            'type': image.content_type or 'image/jpeg'
-                        })
-                    except Exception as e:
-                        await ctx.respond(f"⚠️ Failed to process image {image.filename}: {str(e)}")
-                        return
-                else:
-                    image_embed.description = "⚠️ Current model doesn't support image analysis. Consider switching to a vision-capable model."
+            embed = discord.Embed(color=discord.Color.blue())
+            embed.set_image(url=image.url)
+            await ctx.respond(echo[:2000], embed=embed)
+        else:
+            await ctx.respond(echo[:2000])
 
         try:
-            # Add user message to thread in the database
-            await self.state.add_discord_thread_message(thread_id, {
-                "role": "user",
-                "name": ctx.author.display_name,
-                "content": message,
-                # timestamp is set in the state manager/database
-                "user_id": str(ctx.author.id) # Store user ID
-            })
-
-            # Format conversation context from the database history
-            # Use the getter method with the configured time window
-            conversation_context = self.state.get_discord_thread_history(thread_id, hours_limit=self.state.get_time_window_hours())
-
-            # First response - show the user's message
-            if image_embed:
-                await ctx.respond(f"**{ctx.author.display_name}** in **{thread_name}**: {message}", embed=image_embed)
-                # Follow up with processing message
-                processing_msg = await ctx.followup.send(f"Processing response for thread **{thread_name}**...")
-            else:
-                # Show user's message before processing for text-only messages too
-                await ctx.respond(f"**{ctx.author.display_name}** in **{thread_name}**: {message}\n\n_Processing response..._")
-                processing_msg = None
-
-            # Thread prompt, falling back to persona > channel config > global,
-            # with the parent channel's memory and people notes appended
-            thread_system_prompt = self.state.get_effective_system_prompt(
-                channel_id, speaker_id=str(ctx.author.id), history=conversation_context,
-                base_prompt=thread_system_prompt)
-
-
-            response = await self.openrouter_client.send_message_with_history(
-                conversation_context,
-                images=images if model_supports_images else [],
-                system_prompt=thread_system_prompt
-            )
-
-            # Add AI response to thread in the database
-            await self.state.add_discord_thread_message(thread_id, {
-                "role": "assistant",
-                "content": response,
-                # timestamp is set in the state manager/database
-            })
-
-            # Send response in chunks like other commands
-            chunks = chunk_message(response)
-
-            # Check if a persona is active for webhook-based sending
-            parent_id = str(ctx.channel.parent_id) if isinstance(ctx.channel, discord.Thread) else str(ctx.channel.id)
-            thread_persona_active = (hasattr(self.bot, 'webhook_sender')
-                                     and self.bot.state_manager.get_effective_persona(parent_id))
-
-            # Process the first chunk differently if we have a processing message to edit
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    if thread_persona_active and processing_msg:
-                        await processing_msg.delete()
-                        await self.bot.webhook_sender.send_response(
-                            ctx.channel, f"**Thread: {thread_name}**\n\n{chunk}", parent_id
-                        )
-                    elif processing_msg:
-                        await processing_msg.edit(content=f"**Thread: {thread_name}**\n\n{chunk}")
-                    else:
-                        await ctx.followup.send(f"**Thread: {thread_name}**\n\n{chunk}")
-                else:
-                    if thread_persona_active:
-                        await self.bot.webhook_sender.send_response(ctx.channel, chunk, parent_id)
-                    else:
-                        await ctx.channel.send(chunk)
-        finally:
-            # Restore original model
-            self.openrouter_client.model = current_model
+            recorded_at = await self.service.record_user_turn(conversation, ctx.author, message)
+            await self.service.respond(ReplyRequest(
+                conversation=conversation,
+                author=ctx.author,
+                content=message,
+                message=MessageLike(ctx, message),
+                attachments=[image] if image else [],
+                history_until=recorded_at,
+                recorded=recorded_at is not None,
+                feature="thread",
+            ))
+        except Exception as e:
+            logger.error(f"Error in /thread message for thread {thread_id}: {e}", exc_info=True)
+            await ctx.followup.send("⚠️ Something went wrong while I was answering. Please try again.")
 
     @thread.command(name="list", description="List all active conversation threads in this channel")
     async def list_threads_slash(self, ctx):
@@ -370,6 +231,8 @@ class ThreadCommands(commands.Cog):
 
     @thread.command(name="delete", description="Delete a conversation thread")
     async def delete_thread_slash(self, ctx, id: str):
+        if not await self._ensure_can_manage(ctx, id):
+            return
         # Delete thread from the database
         thread_deleted = self.state.delete_discord_thread(id)
 
@@ -389,6 +252,8 @@ class ThreadCommands(commands.Cog):
 
     @thread.command(name="rename", description="Rename a conversation thread")
     async def rename_thread_slash(self, ctx, id: str, name: str):
+        if not await self._ensure_can_manage(ctx, id):
+            return
         # Rename thread in the database
         thread_renamed = self.state.rename_discord_thread(id, name)
 
@@ -492,8 +357,10 @@ class ThreadCommands(commands.Cog):
             await ctx.respond("⚠️ This command can only be used within a thread.")
             return
 
-        await ctx.defer()
         thread_id = str(ctx.channel.id)
+        if not await self._ensure_can_manage(ctx, thread_id):
+            return
+        await ctx.defer()
 
         try:
             # Remove the ✓ prefix if present (from autocomplete selection)
@@ -527,8 +394,10 @@ class ThreadCommands(commands.Cog):
             await ctx.respond("⚠️ This command can only be used within a thread.")
             return
 
-        await ctx.defer()
         thread_id = str(ctx.channel.id)
+        if not await self._ensure_can_manage(ctx, thread_id):
+            return
+        await ctx.defer()
 
         try:
             # Use the state manager's method
@@ -545,6 +414,19 @@ class ThreadCommands(commands.Cog):
             logger.error(f"Error setting thread system prompt: {e}", exc_info=True)
             await ctx.respond(f"❌ Error: {e}", ephemeral=True)
 
+
+    async def _ensure_can_manage(self, ctx, thread_id: str) -> bool:
+        """Responds with an error and returns False unless ctx.author may manage the thread."""
+        thread_data = self.state.get_discord_thread(str(thread_id).strip())
+        if not thread_data:
+            await ctx.respond("⚠️ Thread not found in the database. Use `/thread list` to see available threads.",
+                              ephemeral=True)
+            return False
+        if not can_manage_ai_thread(self.bot, ctx, thread_data):
+            await ctx.respond("⛔ Only the thread's creator or members with **Manage Threads** can do that.",
+                              ephemeral=True)
+            return False
+        return True
 
     def _is_own_persona_webhook(self, message: discord.Message, channel_id: str) -> bool:
         """True if this message is one the bot sent through its persona webhook.
@@ -607,108 +489,37 @@ class ThreadCommands(commands.Cog):
                  await self.state.add_discord_thread(thread_id, channel_id, thread_name)
                  thread_data = self.state.get_discord_thread(thread_id) # Re-fetch after adding
 
+            conversation = Conversation(channel=message.channel, channel_id=channel_id,
+                                        thread_id=thread_id)
+
             # Add the incoming user message to the database history for this thread
-            await self.state.add_discord_thread_message(thread_id, {
+            recorded_at = await self.service.record(conversation, {
                 "role": "user",
                 "name": message.author.display_name,
                 "user_id": str(message.author.id),
                 "is_bot": message.author.bot,
-                "content": resolve_discord_mentions(message),
-                # timestamp is added in add_discord_thread_message
+                "content": describe_message(message, _replied_to(message)),
             })
 
-            # Get conversation context from the database history for this thread,
-            # bounded by the configured time window
-            conversation_context = self.state.get_discord_thread_history(thread_id, hours_limit=self.state.get_time_window_hours())
-
-            # Get thread-specific model and system prompt from DB
-            thread_config = self.state.get_discord_thread_config(thread_id)
-            thread_model = thread_config.get("model") if thread_config else None
-            thread_system_prompt = thread_config.get("system_prompt") if thread_config else None
-
-            # Determine the model to use (thread-specific > channel-specific > global)
-            model_to_use = thread_model if thread_model else self.get_model_for_channel(channel_id)
-
-            # Determine the system prompt to use (thread-specific > channel-specific > global).
-            # A thread's own prompt still gets the multi-user framing, the parent
-            # channel's memory and the notes on the people in this thread.
-            system_prompt_to_use = self.state.get_effective_system_prompt(
-                channel_id, query=message.content, speaker_id=str(message.author.id),
-                history=conversation_context, base_prompt=thread_system_prompt)
-
-            # Temporarily set the model for this request
-            current_model = self.openrouter_client.model
-            self.openrouter_client.model = model_to_use
+            # Other bots and webhooks are kept as context but never answered,
+            # so two bots can't trigger each other in an endless loop
+            if message.author.bot or message.webhook_id:
+                return
 
             try:
-                # Send "thinking" message
-                thinking_msg = await message.channel.send(f"Thinking about: '{message.content[:50]}...'") # Truncate for thinking message
-
-                # Process images if any are attached to the user message
-                images = []
-                model_supports_images = await self.openrouter_client.model_supports_vision(model_to_use)
-                if model_supports_images and message.attachments:
-                    for attachment in message.attachments:
-                        if any(attachment.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                            try:
-                                image_data = await attachment.read()
-                                images.append({
-                                    'data': image_data,
-                                    'type': attachment.content_type or 'image/jpeg'
-                                })
-                            except Exception as e:
-                                logger.warning(f"Could not process image attachment {attachment.filename}: {e}")
-                                # Continue without the image if processing fails
-
-                # Get response from AI
-                response = await self.openrouter_client.send_message_with_history(
-                    conversation_context,
-                    images=images, # Already empty unless the resolved model supports vision
-                    system_prompt=system_prompt_to_use
-                )
-
-                # Add AI response to thread history in the database
-                await self.state.add_discord_thread_message(thread_id, {
-                    "role": "assistant",
-                    "content": response,
-                    # timestamp is set in the state manager/database
-                })
-
-                # Split response into chunks, turning '@Name' into real pings
-                targets = collect_mention_targets(conversation_context, [message.author, *message.mentions])
-                chunks = chunk_message(apply_outbound_mentions(response, targets))
-
-                # Check if persona is active for the parent channel
-                auto_parent_id = str(message.channel.parent_id) if isinstance(message.channel, discord.Thread) else str(message.channel.id)
-                auto_persona_active = (hasattr(self.bot, 'webhook_sender')
-                                       and self.bot.state_manager.get_effective_persona(auto_parent_id))
-
-                # Update thinking message with first chunk or send via webhook
-                if chunks:
-                    if auto_persona_active:
-                        await thinking_msg.delete()
-                        for chunk in chunks:
-                            await self.bot.webhook_sender.send_response(
-                                message.channel, chunk, auto_parent_id
-                            )
-                    else:
-                        await thinking_msg.edit(content=chunks[0])
-                        for chunk in chunks[1:]:
-                            await message.channel.send(chunk)
-                else:
-                    await thinking_msg.edit(content="Received an empty response from the AI.")
-
-
+                await self.service.respond(ReplyRequest(
+                    conversation=conversation,
+                    author=message.author,
+                    content=describe_message(message, _replied_to(message)),
+                    message=message,
+                    attachments=list(message.attachments or []),
+                    history_until=recorded_at,
+                    recorded=recorded_at is not None,
+                    feature="thread",
+                ))
             except Exception as e:
                 logger.error(f"Error processing thread message in thread {thread_id}: {e}", exc_info=True)
-                # Attempt to edit thinking message with error, or send new message
-                try:
-                    await thinking_msg.edit(content=f"⚠️ Error processing message: {str(e)}")
-                except Exception:
-                    await message.channel.send(f"⚠️ Error processing message: {str(e)}")
-            finally:
-                # Restore original model
-                self.openrouter_client.model = current_model
+                await message.channel.send("⚠️ Something went wrong while I was answering. Please try again.")
 
 
 def setup(bot):

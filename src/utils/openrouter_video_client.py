@@ -18,10 +18,16 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
+
+from yarl import URL
 
 logger = logging.getLogger('openrouter_video_client')
 
 MODELS_CACHE_TTL = 600
+# Larger than Discord's upload limit on purpose: oversized results are linked
+# instead of attached, but nothing unbounded is ever buffered in memory
+MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
 TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled", "error"}
 
 
@@ -259,21 +265,48 @@ class OpenRouterVideoClient(SharedSessionMixin):
             "X-Title": "Gideon Discord Bot",
         }
 
-    async def download_video(self, url: str) -> Dict[str, Any]:
-        """Download a generated video's bytes from a (signed or unsigned) URL."""
+    @staticmethod
+    def _is_openrouter_host(url: str) -> bool:
+        """True for https URLs on openrouter.ai, the only host that gets the API key."""
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return False
+        host = (parts.hostname or "").lower()
+        return parts.scheme == "https" and (host == "openrouter.ai" or host.endswith(".openrouter.ai"))
+
+    async def download_video(self, url: str, max_bytes: int = MAX_DOWNLOAD_BYTES) -> Dict[str, Any]:
+        """Download a generated video's bytes from a (signed or unsigned) URL.
+
+        The API key is only sent to OpenRouter itself. Redirects are followed
+        by hand so the key never travels to whatever host a redirect names.
+        """
         if not url:
             return {"success": False, "error": "Empty URL"}
         try:
             timeout = aiohttp.ClientTimeout(total=300)
-            headers = self._download_headers() if self.is_configured else {}
             async with self.shared_session() as session:
-                async with session.get(url, headers=headers, timeout=timeout) as response:
-                    if response.status != 200:
-                        text = await response.text()
-                        return {"success": False, "error": f"Download failed ({response.status}): {text[:200]}"}
-                    data = await response.read()
-                    content_type = response.headers.get("Content-Type", "video/mp4")
-                    return {"success": True, "data": data, "content_type": content_type}
+                for _ in range(5):
+                    send_key = self.is_configured and self._is_openrouter_host(url)
+                    headers = self._download_headers() if send_key else {}
+                    async with session.get(url, headers=headers, timeout=timeout,
+                                           allow_redirects=False) as response:
+                        if response.status in (301, 302, 303, 307, 308) and response.headers.get("Location"):
+                            url = str(response.url.join(URL(response.headers["Location"])))
+                            continue
+                        if response.status != 200:
+                            text = await response.text()
+                            return {"success": False, "error": f"Download failed ({response.status}): {text[:200]}"}
+                        if (response.content_length or 0) > max_bytes:
+                            return {"success": False, "error": "Video is too large to download"}
+                        data = bytearray()
+                        async for chunk in response.content.iter_chunked(1024 * 1024):
+                            data.extend(chunk)
+                            if len(data) > max_bytes:
+                                return {"success": False, "error": "Video is too large to download"}
+                        content_type = response.headers.get("Content-Type", "video/mp4")
+                        return {"success": True, "data": bytes(data), "content_type": content_type}
+                return {"success": False, "error": "Too many redirects"}
         except aiohttp.ClientError as e:
             return {"success": False, "error": f"Network error: {e}"}
         except Exception as e:

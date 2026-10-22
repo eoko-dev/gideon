@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -29,6 +29,7 @@ from .auth import (
 from .error_log import ErrorLogBuffer
 from ..memory_service import archive_and_prune, llm_clients, summarize_and_clear
 from .. import user_memory
+from ..timeutil import now_local_naive
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +50,24 @@ SETTINGS_INT_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
     'tool_calling_max_iterations': (1, 10),
+    'daily_user_image_limit': (0, 1000),
+    'daily_user_video_limit': (0, 1000),
+    'max_unprompted_posts_per_hour': (0, 60),
 }
-SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled')
+# Daily per-user LLM spend cap in USD (0 = unlimited)
+COST_BUDGET_RANGE = (0.0, 1000.0)
+SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled',
+                        'respond_to_everyone', 'allow_everyone_pings', 'stream_replies', 'welcome_enabled')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
 }
-CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled')
+CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone',
+                              'allow_everyone_pings')
 CHANNEL_OVERRIDE_FIELDS = (
     'model', 'provider', 'system_prompt',
     'session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries', 'user_memory_enabled',
+    'respond_to_everyone', 'allow_everyone_pings',
 )
 
 
@@ -251,6 +260,7 @@ class DashboardServer:
 
         # Overview API
         router.add_get('/api/overview', self._handle_overview)
+        router.add_get('/api/usage', self._handle_get_usage)
 
         # Settings API
         router.add_get('/api/settings', self._handle_get_settings)
@@ -532,6 +542,18 @@ class DashboardServer:
             'user_memory_enabled': state.get_user_memory_enabled(),
             'tool_calling_enabled': state.get_tool_calling_enabled(),
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
+            'respond_to_everyone': state.get_respond_to_everyone(),
+            'allow_everyone_pings': state.get_allow_everyone_pings(),
+            'stream_replies': state.get_stream_replies(),
+            'max_unprompted_posts_per_hour': state.get_max_unprompted_posts_per_hour(),
+            'welcome_enabled': state.get_welcome_enabled(),
+            'welcome_channel_id': state.get_welcome_channel_id(),
+            'welcome_note': state.get_welcome_note(),
+            'members_intent': bool(getattr(getattr(self.bot, 'intents', None), 'members', False)),
+            'utility_model': state.get_utility_model(),
+            'daily_user_cost_budget': state.get_daily_user_cost_budget(),
+            'daily_user_image_limit': state.get_daily_user_image_limit(),
+            'daily_user_video_limit': state.get_daily_user_video_limit(),
         })
 
     async def _handle_update_settings(self, request):
@@ -576,6 +598,41 @@ class DashboardServer:
                 except ValueError as e:
                     errors[name] = str(e)
 
+        if 'daily_user_cost_budget' in data:
+            value = data['daily_user_cost_budget']
+            low, high = COST_BUDGET_RANGE
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                errors['daily_user_cost_budget'] = f'daily_user_cost_budget must be a number from {low:g} to {high:g}'
+            else:
+                parsed['daily_user_cost_budget'] = float(value)
+
+        if 'welcome_channel_id' in data:
+            value = data['welcome_channel_id']
+            if value in (None, ''):
+                parsed['welcome_channel_id'] = None
+            elif not re.fullmatch(r'\d{5,25}', str(value).strip()):
+                errors['welcome_channel_id'] = 'welcome_channel_id must be a channel ID (digits) or null'
+            else:
+                parsed['welcome_channel_id'] = str(value).strip()
+
+        if 'welcome_note' in data:
+            value = data['welcome_note']
+            if value is not None and (not isinstance(value, str) or len(value) > 1000):
+                errors['welcome_note'] = 'welcome_note must be text up to 1000 characters, or null'
+            else:
+                parsed['welcome_note'] = value
+
+        if 'utility_model' in data:
+            value = data['utility_model']
+            if value is None or (isinstance(value, str) and not value.strip()):
+                parsed['utility_model'] = None
+            elif value != state.get_utility_model():
+                error = await self._check_model(value)
+                if error:
+                    errors['utility_model'] = error
+                else:
+                    parsed['utility_model'] = value.strip()
+
         if errors:
             raise validation_error(errors)
 
@@ -592,6 +649,17 @@ class DashboardServer:
             'user_memory_enabled': state.set_user_memory_enabled,
             'tool_calling_enabled': state.set_tool_calling_enabled,
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
+            'respond_to_everyone': state.set_respond_to_everyone,
+            'allow_everyone_pings': state.set_allow_everyone_pings,
+            'stream_replies': state.set_stream_replies,
+            'max_unprompted_posts_per_hour': state.set_max_unprompted_posts_per_hour,
+            'welcome_enabled': state.set_welcome_enabled,
+            'welcome_channel_id': state.set_welcome_channel_id,
+            'welcome_note': state.set_welcome_note,
+            'utility_model': state.set_utility_model,
+            'daily_user_cost_budget': state.set_daily_user_cost_budget,
+            'daily_user_image_limit': state.set_daily_user_image_limit,
+            'daily_user_video_limit': state.set_daily_user_video_limit,
         }
         updated = []
         # The model is the only setter that can still fail (it re-checks the live
@@ -607,6 +675,34 @@ class DashboardServer:
 
         await self._broadcast_ws({'type': 'settings_updated', 'fields': updated})
         return web.json_response({'status': 'ok', 'updated': updated})
+
+    # ── Usage ──────────────────────────────────────────────────────
+
+    async def _handle_get_usage(self, request):
+        """LLM tokens/cost and image/video jobs over the last N days (default 7)."""
+        try:
+            days = coerce_int(request.query.get('days', 7), 'days', 1, 90)
+        except ValueError as e:
+            raise validation_error({'days': str(e)})
+        since = now_local_naive().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        summary = await self._db(self.bot.state_manager.db_manager.usage.summary, since)
+        for row in summary.get('by_user', []):
+            row['user_name'] = self._user_name(row.get('key'))
+        state = self.bot.state_manager
+        summary['days'] = days
+        summary['limits'] = {
+            'daily_user_cost_budget': state.get_daily_user_cost_budget(),
+            'daily_user_image_limit': state.get_daily_user_image_limit(),
+            'daily_user_video_limit': state.get_daily_user_video_limit(),
+        }
+        return web.json_response(summary)
+
+    def _user_name(self, user_id) -> Optional[str]:
+        try:
+            user = self.bot.get_user(int(user_id)) if user_id else None
+        except (TypeError, ValueError, AttributeError):
+            user = None
+        return getattr(user, 'display_name', None) or getattr(user, 'name', None)
 
     # ── Channel Handlers ───────────────────────────────────────────
 
@@ -626,7 +722,9 @@ class DashboardServer:
         cursor = self.bot.state_manager.db_manager._get_cursor()
         cursor.execute(
             "SELECT channel_id, model, provider, system_prompt, session_timeout_hours, "
-            "memory_summary_enabled, max_memory_summaries, user_memory_enabled FROM CHANNEL_CONFIG"
+            "memory_summary_enabled, max_memory_summaries, user_memory_enabled, respond_to_everyone, "
+            "allow_everyone_pings "
+            "FROM CHANNEL_CONFIG"
         )
         return {row['channel_id']: dict(row) for row in cursor.fetchall()}
 
@@ -679,7 +777,7 @@ class DashboardServer:
         memory_config = {
             name: state._get_channel_memory_config(channel_id, name)
             for name in ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
-                         'user_memory_enabled')
+                         'user_memory_enabled', 'respond_to_everyone', 'allow_everyone_pings')
         }
 
         raw_persona = state.get_channel_persona(channel_id)
@@ -714,6 +812,8 @@ class DashboardServer:
             'effective_memory_summary_enabled': state.get_effective_memory_summary_enabled(channel_id),
             'effective_max_memory_summaries': state.get_effective_max_memory_summaries(channel_id),
             'effective_user_memory_enabled': state.get_effective_user_memory_enabled(channel_id),
+            'effective_respond_to_everyone': state.get_effective_respond_to_everyone(channel_id),
+            'effective_allow_everyone_pings': state.get_effective_allow_everyone_pings(channel_id),
             'persona': persona,
             'sources': sources,
         })
@@ -1974,6 +2074,13 @@ class DashboardServer:
             response.content_length = os.path.getsize(backup_path)
             await response.prepare(request)
             with open(backup_path, 'rb') as f:
+                # Unlink while open (POSIX keeps the data readable) so the file
+                # is gone before the client has the last byte; the finally
+                # below covers platforms that can't remove open files
+                try:
+                    remove_sqlite_files(backup_path)
+                except OSError:
+                    pass
                 while True:
                     chunk = await asyncio.to_thread(f.read, CHUNK_SIZE * 4)
                     if not chunk:

@@ -1,6 +1,5 @@
 """Functionality for responding to @mentions in messages."""
 import discord
-import asyncio
 import logging
 import io
 import json
@@ -8,12 +7,13 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
-from ..utils.memory_service import check_and_rotate_session, schedule_compaction
-from ..utils.discord_fmt import chunk_message
-from ..utils.timeutil import to_epoch
-from ..utils.tool_registry import get_tool_definitions, execute_tool, is_no_repeat_tool
+from ..utils import budget
+from ..utils.conversation_service import Conversation, ConversationService, ReplyRequest
+from ..utils.llm_result import call_chat
+from ..utils.tool_registry import untrusted_block
+from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
+from ..utils.llm_formatting import describe_message
 from ..config import DEFAULT_MODEL
 
 logger = logging.getLogger('mention_commands')
@@ -25,11 +25,7 @@ class MentionCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.state = bot.state_manager
-        self.clients = {
-            "openrouter": getattr(bot, 'openrouter_client', None),
-            "openai": getattr(bot, 'openai_client', None),
-            "ai_horde": getattr(bot, 'ai_horde_client', None)
-        }
+        self.service = getattr(bot, 'conversation_service', None) or ConversationService(bot)
         # Channels the bot participates in — history is only recorded for
         # these, so the bot doesn't log every channel it can merely see.
         self._active_channels: Optional[set] = None
@@ -37,6 +33,11 @@ class MentionCommands(commands.Cog):
         # read history up to that point only, so messages that land while a
         # reply is in flight can't be mistaken for the turn being answered.
         self._history_anchors: Dict[int, datetime] = {}
+
+    @property
+    def clients(self) -> Dict[str, Any]:
+        """Provider clients, read live so dashboard key rotation applies."""
+        return llm_clients(self.bot)
 
     def get_model_for_channel(self, channel_id):
         """Get the appropriate model for this channel"""
@@ -51,15 +52,30 @@ class MentionCommands(commands.Cog):
         return content.strip()
 
     def _history_for(self, message: discord.Message, channel_id: str) -> List[Dict[str, Any]]:
-        """Channel history as of the message being answered."""
-        return self.state.get_channel_history(channel_id, until=self._history_anchors.get(message.id))
+        """Conversation history (channel or thread) as of the message being answered."""
+        return self.service.history(self._conversation(message, channel_id),
+                                    until=self._history_anchors.get(message.id))
 
     async def _send_reply(self, message: discord.Message, channel_id: str,
                           text: str, history: List[Dict[str, Any]]):
         """Sends an LLM reply in chunks, turning '@Name' into real pings."""
-        text = apply_outbound_mentions(text, collect_mention_targets(history, [message.author, *message.mentions]))
-        for chunk in chunk_message(text):
-            await self.bot.webhook_sender.send_response(message.channel, chunk, channel_id)
+        await self.service.send(self._conversation(message, channel_id), text, history,
+                                [message.author, *message.mentions])
+
+    def _conversation(self, message: discord.Message, channel_id: str) -> Conversation:
+        """The conversation a message belongs to (a thread keeps its own history)."""
+        if isinstance(message.channel, discord.Thread):
+            return Conversation(channel=message.channel, channel_id=str(message.channel.parent_id),
+                                thread_id=str(message.channel.id))
+        return Conversation(channel=message.channel, channel_id=channel_id)
+
+    async def record_tool_note(self, message, channel_id: str, content: str):
+        """Records something a tool posted as an assistant turn in this conversation."""
+        try:
+            await self.service.record(self._conversation(message, channel_id),
+                                      {"role": "assistant", "content": content})
+        except Exception as e:
+            logger.error(f"[Tool] Could not record tool output: {e}", exc_info=True)
 
     # ─── History recording guard ────────────────────────────────────────────
 
@@ -83,6 +99,8 @@ class MentionCommands(commands.Cog):
         try:
             db = self.state.db_manager
             active.update(db.messages.get_distinct_channel_ids())
+            # User threads and forum posts Gideon has joined
+            active.update(db.messages.get_distinct_untracked_thread_ids())
             active.update(db.get_all_configured_channel_ids())
             for persona in db.get_all_channel_personas():
                 if persona.get('channel_id'):
@@ -102,16 +120,16 @@ class MentionCommands(commands.Cog):
         still gets a conversational response with the error context.
         """
         content = user_content if user_content is not None else (self._strip_mentions(message.content) or "Hello!")
+        conversation = self._conversation(message, channel_id)
 
-        provider, model_name = self.state.resolve_model(channel_id)
-        client_to_use = self.clients.get(provider)
-        if not client_to_use or not hasattr(client_to_use, 'send_message_with_history'):
+        provider, model_name, client_to_use = self.service.resolve(conversation)
+        if client_to_use is None:
             await message.channel.send(f"{prefix}Additionally, the conversation system is unavailable.")
             return
 
         conversation_context = self._history_for(message, channel_id)
-        channel_system_prompt = self.state.get_effective_system_prompt(
-            channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
+        channel_system_prompt = self.service.system_prompt(
+            conversation, content, str(message.author.id), conversation_context)
         conversation_context.append({
             "role": "user",
             "name": message.author.display_name,
@@ -120,19 +138,15 @@ class MentionCommands(commands.Cog):
 
         try:
             async with message.channel.typing():
-                response = await client_to_use.send_message_with_history(
-                    messages=conversation_context,
-                    model=model_name,
-                    system_prompt=channel_system_prompt
-                )
+                result = await self.service.generate(
+                    client_to_use, model_name, conversation_context, channel_system_prompt)
+            if not result.ok:
+                await message.channel.send(f"{prefix}Additionally, failed to generate a conversation response.")
+                return
 
-            full_response = f"{prefix}{response}"
+            full_response = f"{prefix}{result.text}"
 
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": full_response,
-                "timestamp": datetime.now()
-            })
+            await self.service.record(conversation, {"role": "assistant", "content": full_response})
 
             await self._send_reply(message, channel_id, full_response, conversation_context)
 
@@ -147,105 +161,56 @@ class MentionCommands(commands.Cog):
         message: discord.Message,
         channel_id: str,
         reminder_message: str,
-        time_expression: str
+        time_expression: str,
+        deliver_by_dm: bool = False,
     ):
         """
-        Handle a reminder request detected from a mention.
+        Handle a reminder request from the set_reminder tool.
 
-        Args:
-            message: Original Discord message object
-            channel_id: Channel ID as string
-            reminder_message: What to remind about
-            time_expression: Natural language time expression
+        ``time_expression`` may repeat ("every monday at 9am") and is read in
+        the user's timezone. Posts a confirmation and returns None on success;
+        on failure posts nothing and returns the reason for the model to relay.
         """
-        # Validate inputs
         if not reminder_message or not reminder_message.strip():
-            await message.channel.send(
-                "❌ I detected you want a reminder, but I'm not sure what to remind you about. "
-                "Please try something like: '@Gideon remind me in 2 hours to check the oven'"
-            )
-            logger.warning(f"[Tool] Missing reminder message for user {message.author.id}")
-            return
-
+            return "It isn't clear what to remind the user about. Ask them."
         if not time_expression or not time_expression.strip():
-            await message.channel.send(
-                "❌ I detected you want a reminder, but I'm not sure when. "
-                "Please specify a time like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
-            logger.warning(f"[Tool] Missing time expression for user {message.author.id}")
-            return
+            return "It isn't clear when to remind the user. Ask for a time like 'in 2 hours' or 'tomorrow at 3pm'."
 
-        # Get ReminderCommands cog
         reminder_cog = self.bot.get_cog('ReminderCommands')
         if not reminder_cog:
-            await message.channel.send("⚠️ Reminder system not available.")
             logger.error("[Tool] ReminderCommands cog not found")
-            return
+            return "The reminder system isn't available right now."
 
-        # Parse time using existing method
         try:
-            parsed_time = await reminder_cog.parse_time_with_ai(time_expression, channel_id)
+            plan = await reminder_cog.plan_reminder(time_expression, channel_id, message.author)
         except Exception as e:
             logger.error(f"[Tool] Error parsing time: {e}", exc_info=True)
-            await message.channel.send(
-                f"❌ Failed to parse time expression '{time_expression}'. "
-                f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
-            return
+            plan = None
+        if plan is None:
+            tip = ("" if self.state.get_user_timezone_name(str(message.author.id))
+                   else " (The user hasn't set a timezone; /me timezone fixes that.)")
+            return (f"'{time_expression}' couldn't be understood as a future time. Ask for something like "
+                    f"'in 2 hours', 'tomorrow at 3pm' or 'every monday at 9am'.{tip}")
+        if plan["due"] > datetime.now() + timedelta(days=366):
+            return "Reminders can be at most a year away."
 
-        if parsed_time is None:
-            await message.channel.send(
-                f"❌ I couldn't understand the time '{time_expression}'. "
-                f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'"
-            )
-            logger.warning(f"[Tool] Failed to parse time expression: {time_expression}")
-            return
-
-        # Validate time is not too far in the future (max 1 year)
-        max_future = datetime.now() + timedelta(days=365)
-        if parsed_time > max_future:
-            await message.channel.send(
-                "❌ Reminder time is too far in the future (max 1 year)."
-            )
-            logger.warning(f"[Tool] Reminder time too far in future: {parsed_time}")
-            return
-
-        # Save reminder to database
         try:
             user_id = str(message.author.id)
+            # Deliver where it was asked for (a thread, if it was asked in one)
             reminder_id = self.state.add_reminder(
-                user_id=user_id,
-                channel_id=channel_id,
-                message=reminder_message,
-                due_timestamp=parsed_time
-            )
-
-            # Discord timestamp (shows in each user's own timezone)
-            discord_timestamp = to_epoch(parsed_time)
-
-            # Format confirmation matching /remind command
-            confirmation_message = (
-                f"✅ Reminder set!\n"
-                f"**Message:** {reminder_message}\n"
-                f"**When:** <t:{discord_timestamp}:F> (<t:{discord_timestamp}:R>)\n"
-                f"**Reminder ID:** {reminder_id}"
-            )
-
-            # Send confirmation
-            await message.channel.send(confirmation_message)
-
-            # Add confirmation to channel history
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": confirmation_message,
-                "timestamp": datetime.now()
-            })
-
-            logger.info(f"[Tool] User {user_id} set reminder {reminder_id} for {parsed_time} via mention")
-
+                user_id=user_id, channel_id=str(message.channel.id), message=reminder_message,
+                due_timestamp=plan["due"], recurrence=plan["recurrence"], deliver_dm=bool(deliver_by_dm),
+                timezone=plan["timezone"])
+            from .reminder_commands import format_confirmation
+            confirmation_message = format_confirmation(reminder_id, reminder_message, plan["due"],
+                                                       plan["recurrence"], bool(deliver_by_dm))
+            # Send confirmation (through the persona webhook when one is active)
+            await self.bot.webhook_sender.send_response(message.channel, confirmation_message, channel_id)
+            await self.record_tool_note(message, channel_id, confirmation_message)
+            logger.info(f"[Tool] User {user_id} set reminder {reminder_id} for {plan['due']} via mention")
         except Exception as e:
             logger.exception(f"[Tool] Error setting reminder: {e}")
-            await message.channel.send(f"❌ Failed to save reminder: {str(e)}")
+            return "The reminder could not be saved."
 
     async def handle_image_generation_request(
         self,
@@ -260,6 +225,9 @@ class MentionCommands(commands.Cog):
         """
         Handle an image generation request detected from a mention.
 
+        Posts the image on success and returns None; on failure posts nothing
+        and returns the reason for the model to relay.
+
         Args:
             message: Original Discord message object
             channel_id: Channel ID as string
@@ -271,22 +239,18 @@ class MentionCommands(commands.Cog):
         """
         # Validate prompt
         if not prompt or not prompt.strip():
-            await message.channel.send(
-                "❌ I detected you want to generate an image, but I'm not sure what to create. "
-                "Please try something like: '@Gideon draw a sunset over mountains'"
-            )
             logger.warning(f"[Tool] Missing image prompt for user {message.author.id}")
-            return
+            return "No image description was given. Ask the user what to draw."
+
+        limit_error = budget.generation_limit_error(self.state, message.author, budget.IMAGE, self.bot)
+        if limit_error:
+            return limit_error
 
         # Get UnifiedImageCommands cog
         image_cog = self.bot.get_cog('UnifiedImageCommands')
         if not image_cog:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix="Image generation failed. The image generation system is not available. "
-            )
             logger.error("[Tool] UnifiedImageCommands cog not found")
-            return
+            return "The image generation system is not available."
 
         # Get active provider and config from database
         try:
@@ -307,12 +271,8 @@ class MentionCommands(commands.Cog):
                 provider_config = DEFAULT_CONFIGS.get(active_provider, {})
 
         except Exception as e:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix="Image generation failed. Could not retrieve image provider configuration. "
-            )
             logger.error(f"[Tool] Error getting image provider config: {e}")
-            return
+            return "Could not retrieve image provider configuration."
 
         # Select and validate client
         client = None
@@ -434,12 +394,8 @@ class MentionCommands(commands.Cog):
                         pass  # Fall back to client default ["image", "text"]
 
         if not client:
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. The {provider_display_name} client is not configured. "
-            )
             logger.error(f"[Tool] {provider_display_name} client not available")
-            return
+            return f"The {provider_display_name} client is not configured."
 
         # Send "generating" message with typing indicator
         async with message.channel.typing():
@@ -453,14 +409,12 @@ class MentionCommands(commands.Cog):
         except Exception as e:
             logger.exception(f"[Tool] Exception during image generation with {active_provider}: {e}")
             await thinking_msg.delete()
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. An unexpected error occurred: {str(e)}. "
-            )
-            return
+            return "The image provider failed unexpectedly."
 
         # Handle result
         if result.get("success"):
+            budget.record_generation(self.state, budget.IMAGE, message.author.id, channel_id,
+                                     provider=active_provider)
             # Build embed
             embed = discord.Embed(
                 title="Generated Image",
@@ -489,38 +443,26 @@ class MentionCommands(commands.Cog):
             if result.get("revised_prompt"):
                 embed.add_field(name="Revised Prompt (DALL-E 3)", value=result["revised_prompt"], inline=False)
 
-            # Send image
+            # Send image (through the persona webhook when one is active)
+            files = []
             if "image_url" in result:
                 embed.set_image(url=result["image_url"])
-                await thinking_msg.edit(content=None, embed=embed)
             elif "image_data" in result:
                 # ComfyUI returns raw bytes - create Discord file from memory
-                file = discord.File(
-                    io.BytesIO(result["image_data"]),
-                    filename="generated_image.png"
-                )
+                files = [discord.File(io.BytesIO(result["image_data"]), filename="generated_image.png")]
                 embed.set_image(url="attachment://generated_image.png")
-                await thinking_msg.delete()
-                await message.channel.send(embed=embed, file=file)
             elif "local_path" in result:
-                file = discord.File(result["local_path"], filename="generated_image.png")
+                files = [discord.File(result["local_path"], filename="generated_image.png")]
                 embed.set_image(url="attachment://generated_image.png")
-                await thinking_msg.delete()
-                await message.channel.send(embed=embed, file=file)
             else:
                 await thinking_msg.delete()
-                await self.respond_conversationally(
-                    message, channel_id,
-                    prefix="Image generation failed. No image data returned. "
-                )
-                return
+                return "No image data returned."
+            await thinking_msg.delete()
+            await self.bot.webhook_sender.send_response(message.channel, "", channel_id,
+                                                        embeds=[embed], files=files or None)
 
             # Add to conversation history (assistant response)
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": f"[Generated image: {prompt}]",
-                "timestamp": datetime.now()
-            })
+            await self.record_tool_note(message, channel_id, f"[Generated image: {prompt}]")
 
             logger.info(f"[Tool] User {message.author.id} generated image via mention: '{prompt}' using {provider_display_name}")
 
@@ -528,17 +470,15 @@ class MentionCommands(commands.Cog):
             # Generation failed
             error_msg = result.get("error", "Unknown error")
             await thinking_msg.delete()
-            await self.respond_conversationally(
-                message, channel_id,
-                prefix=f"Image generation failed. {error_msg}. "
-            )
             logger.warning(f"[Tool] Image generation failed for user {message.author.id}: {error_msg}")
+            return f"The image provider reported an error: {str(error_msg)[:200]}"
 
     async def handle_search_request(
         self,
         message: discord.Message,
         channel_id: str,
-        query: str
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
         Run a web search for the native tool-calling path.
@@ -574,17 +514,16 @@ class MentionCommands(commands.Cog):
                     f"so no search was performed. Answer from your own knowledge and "
                     f"mention that live search was unavailable.")
 
-        # Provider is OpenRouter, proceed with web search
         client_to_use = self.clients.get("openrouter")
         if not client_to_use:
             logger.error("[Tool] OpenRouter client not found")
             return ("Error: the OpenRouter client is not available, so the search "
                     "did not run.")
 
-        # Get conversation context
-        conversation_context = self._history_for(message, channel_id)
+        # The conversation the tool was called from (a thread's own history in
+        # threads), else this channel's history up to the message
+        conversation_context = list(history) if history is not None else self._history_for(message, channel_id)
 
-        # Enhance system prompt for search
         channel_system_prompt = self.state.get_effective_system_prompt(
             channel_id, query=query, speaker_id=str(message.author.id), history=conversation_context)
         search_system_prompt = build_search_system_prompt(channel_system_prompt)
@@ -597,9 +536,9 @@ class MentionCommands(commands.Cog):
         # Temporary status message so the channel sees search activity
         search_msg = await message.channel.send(SEARCHING_STATUS.format(query=query))
 
-        # Perform search
         try:
-            response = await client_to_use.send_message_with_history(
+            result = await call_chat(
+                client_to_use,
                 messages=conversation_context,
                 model=model_name,
                 system_prompt=search_system_prompt,
@@ -607,140 +546,38 @@ class MentionCommands(commands.Cog):
             )
         except Exception as e:
             logger.exception(f"[Tool] Error during web search: {e}")
-            return (f"Error: the web search failed ({e}). Do not retry the same "
-                    f"search; apologise briefly and answer from your own knowledge.")
+            return ("Error: the web search failed. Do not retry the same search; "
+                    "apologise briefly and answer from your own knowledge.")
         finally:
             try:
                 await search_msg.delete()
             except discord.HTTPException:
                 pass
 
-        # The client reports provider failures (rate limits, API errors) as
-        # "⚠️ ..." strings rather than raising, and can return None for a
-        # null-content completion — neither must be dressed up as results.
-        if not isinstance(response, str) or not response.strip():
-            logger.warning(f"[Tool] Web search returned no usable results: {response!r}")
-            return (f"Error: the web search returned no results. Do not retry the "
+        if not result.ok:
+            logger.warning(f"[Tool] Web search failed ({result.error_kind}): {result.detail}")
+            return (f"Error: the web search failed ({result.error}). Do not retry the "
                     f"same search; apologise briefly and answer from your own knowledge.")
-        if response.startswith("⚠️"):
-            logger.warning(f"[Tool] Web search returned a provider error: {response}")
-            return (f"Error: the web search failed with a provider error: {response}\n"
-                    f"Do not retry the same search; apologise briefly and answer "
-                    f"from your own knowledge.")
+        response = result.text
+        if not response.strip():
+            logger.warning("[Tool] Web search returned no usable results")
+            return ("Error: the web search returned no results. Do not retry the "
+                    "same search; apologise briefly and answer from your own knowledge.")
 
         logger.info(f"[Tool] User {message.author.id} performed web search via mention: '{query}'")
 
         return (f"Web search results for '{query}'. The user has NOT seen these — "
                 f"use them to write your reply, keeping any source citations that "
-                f"matter:\n\n{response}")
-
-    # ─── Native tool-calling loop ───────────────────────────────────────────
-
-    async def _run_tool_loop(
-        self,
-        client,
-        conversation_context: List[Dict[str, Any]],
-        model_name: str,
-        system_prompt: Optional[str],
-        images: Optional[List[Dict[str, Any]]],
-        tool_context: Dict[str, Any]
-    ) -> Optional[str]:
-        """Runs the model with tools, feeding results back until it produces text.
-
-        Iterates up to the configured budget; each round's tool results are
-        appended to the conversation so the model can synthesize an answer,
-        chain tools, or recover from a tool error. Returns the final text
-        response (possibly an error string starting with ⚠️).
-        """
-        tools = get_tool_definitions()
-        max_iterations = self.state.get_tool_calling_max_iterations()
-        executed_calls: set = set()
-
-        for iteration in range(max_iterations):
-            response = await client.send_message_with_history(
-                messages=conversation_context,
-                model=model_name,
-                system_prompt=system_prompt,
-                images=images if iteration == 0 else None,
-                tools=tools,
-                tool_choice="auto"
-            )
-
-            # Plain text (normal reply or provider error string)
-            if isinstance(response, str):
-                return response
-
-            if not isinstance(response, dict):
-                logger.error(f"[Tool] Unexpected response type from client: {type(response)}")
-                return None
-
-            tool_calls = response.get("tool_calls")
-            if not tool_calls:
-                return response.get("content") or ""
-
-            logger.info(f"[Tool] Iteration {iteration + 1}/{max_iterations}: model requested {len(tool_calls)} tool call(s)")
-
-            # Record the assistant's tool-call turn
-            conversation_context.append({
-                "role": "assistant",
-                "content": response.get("content") or "",
-                "tool_calls": tool_calls
-            })
-
-            # Execute each tool call and feed the result back
-            for tc in tool_calls:
-                func_name = tc.get("function", {}).get("name", "")
-                func_args_str = tc.get("function", {}).get("arguments", "{}")
-                tool_call_id = tc.get("id", "")
-
-                try:
-                    func_args = json.loads(func_args_str) if func_args_str else {}
-                except json.JSONDecodeError as e:
-                    logger.error(f"[Tool] Failed to parse tool arguments for '{func_name}': {e}")
-                    func_args = {}
-
-                # Side-effect tools (search, image, reminder, poll, event)
-                # must not run twice with identical arguments in one reply —
-                # a repeat means the model ignored the earlier result, so
-                # point it back at that instead of re-posting to Discord.
-                call_key = ((func_name, json.dumps(func_args, sort_keys=True))
-                            if is_no_repeat_tool(func_name) else None)
-                if call_key and call_key in executed_calls:
-                    logger.warning(f"[Tool] Skipping duplicate '{func_name}' call with identical arguments")
-                    tool_result = (f"Duplicate call skipped: '{func_name}' already ran with these exact "
-                                   f"arguments during this reply. Use its earlier result above to answer "
-                                   f"the user now — do not call it again.")
-                else:
-                    tool_result = await execute_tool(func_name, func_args, tool_context)
-                    # Record only successful runs so a transient failure can
-                    # still be retried within the same reply
-                    if call_key and not tool_result.startswith("Error"):
-                        executed_calls.add(call_key)
-
-                conversation_context.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_result
-                })
-
-        # Iteration budget exhausted — force a text answer (no tools offered)
-        logger.warning(f"[Tool] Iteration budget ({max_iterations}) exhausted; forcing text response")
-        response = await client.send_message_with_history(
-            messages=conversation_context,
-            model=model_name,
-            system_prompt=system_prompt
-        )
-        if isinstance(response, dict):
-            return response.get("content") or ""
-        return response
+                f"matter:\n\n{untrusted_block('web search', response)}")
 
     # ─── Message listener ───────────────────────────────────────────────────
 
-    def _is_bot_mentioned(self, message: discord.Message) -> bool:
+    def _is_bot_mentioned(self, message: discord.Message, channel_id: Optional[str] = None) -> bool:
         """Checks @everyone/@here, user mentions, raw content, and same-named role mentions."""
         # Gideon is part of everyone. Discord only sets this when the author
-        # was allowed to ping everyone, so typed-but-inert "@everyone" is ignored.
-        if message.mention_everyone:
+        # was allowed to ping everyone, so typed-but-inert "@everyone" is
+        # ignored. Admins can switch this off globally or per channel.
+        if message.mention_everyone and self._responds_to_everyone(channel_id or str(message.channel.id)):
             return True
 
         for mention in message.mentions:
@@ -760,6 +597,16 @@ class MentionCommands(commands.Cog):
 
         return False
 
+    def _responds_to_everyone(self, channel_id: str) -> bool:
+        getter = getattr(self.state, "get_effective_respond_to_everyone", None)
+        if getter is None:
+            return True
+        try:
+            return bool(getter(channel_id))
+        except Exception as e:
+            logger.error(f"[Mention] Could not read respond_to_everyone for {channel_id}: {e}")
+            return True
+
     def _is_own_persona_webhook(self, message: discord.Message, channel_id: str) -> bool:
         """True if this message is one the bot sent through its persona webhook.
 
@@ -778,64 +625,124 @@ class MentionCommands(commands.Cog):
 
         return bool(persona) and str(message.webhook_id) == str(persona.get('webhook_id') or '')
 
+    def _is_gideon_message(self, message, channel_id: str) -> bool:
+        """True for a message Gideon wrote (bot account or its persona webhook)."""
+        author = getattr(message, "author", None)
+        if author is not None and getattr(author, "id", None) == self.bot.user.id:
+            return True
+        return bool(getattr(message, "webhook_id", None)) and self._is_own_persona_webhook(message, channel_id)
+
+    async def _referenced_message(self, message, fetch: bool):
+        """The message this one replies to, if any (fetched only when ``fetch``)."""
+        reference = getattr(message, "reference", None)
+        if reference is None or getattr(reference, "message_id", None) is None:
+            return None
+        # Forwards carry their content in message.snapshots instead
+        if "forward" in str(getattr(reference, "type", "")).lower():
+            return None
+        resolved = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
+        if isinstance(resolved, discord.DeletedReferencedMessage):
+            return None
+        if resolved is None and fetch:
+            try:
+                resolved = await message.channel.fetch_message(reference.message_id)
+            except (discord.HTTPException, AttributeError):
+                return None
+        return resolved
+
+    def _thread_is_managed(self, thread) -> bool:
+        """AI threads (and trivia threads) are answered by their own cogs."""
+        thread_id = str(thread.id)
+        try:
+            if self.state.get_discord_thread(thread_id):
+                return True
+            if self.state.get_active_trivia_session(thread_id):
+                return True
+        except Exception as e:
+            logger.error(f"[Mention] Could not check thread {thread_id}: {e}")
+            return True
+        return getattr(thread, "owner_id", None) == self.bot.user.id
+
     @commands.Cog.listener()
     async def on_message(self, message):
-        """Listen for messages in channels and respond to @mentions."""
+        """Records conversation in active channels/threads and answers when addressed."""
         # Ignore messages from the bot itself
         if message.author == self.bot.user:
             return
 
-        # Ignore messages in threads as they're handled by ThreadCommands
+        # User-created threads and forum posts are handled here (on mention,
+        # in the thread's own history); AI threads belong to ThreadCommands
+        thread_id = None
         if isinstance(message.channel, discord.Thread):
-            return
-
-        channel_id = str(message.channel.id)
+            if self._thread_is_managed(message.channel):
+                return
+            thread_id = str(message.channel.id)
+            channel_id = str(message.channel.parent_id)
+        else:
+            channel_id = str(message.channel.id)
 
         # Persona replies go out through a webhook, so they aren't authored by
         # bot.user and would otherwise be recorded as if a human had said them
         if self._is_own_persona_webhook(message, channel_id):
             return
 
-        is_mentioned = self._is_bot_mentioned(message)
+        is_mentioned = self._is_bot_mentioned(message, channel_id)
+        referenced = await self._referenced_message(message, fetch=is_mentioned)
+        # Replying to Gideon addresses it, even with the reply ping turned off
+        if not is_mentioned and referenced is not None and self._is_gideon_message(referenced, channel_id):
+            is_mentioned = True
+
+        conversation = Conversation(channel=message.channel, channel_id=channel_id, thread_id=thread_id)
         recorded = False
+        recorded_at = None
 
-        # Only record history for channels the bot participates in
-        if self.state and self._should_record(channel_id, is_mentioned):
-            # Check for session expiry and rotate before recording the new message
-            try:
-                await check_and_rotate_session(channel_id, self.state, self.clients)
-            except Exception as e:
-                logger.error(f"[Mention] Error during session rotation for channel {channel_id}: {e}", exc_info=True)
+        # Only record history for channels (and threads) the bot participates in
+        if self.state and self._should_record(thread_id or channel_id, is_mentioned):
+            entry = {
+                "role": "user",
+                "name": message.author.display_name,
+                "user_id": str(message.author.id),
+                "is_bot": message.author.bot,
+                "content": describe_message(message, referenced),
+            }
+            if thread_id:
+                try:
+                    recorded_at = await self.service.record(conversation, entry)
+                except Exception as e:
+                    logger.error(f"[Mention] Error adding message to thread {thread_id}: {e}", exc_info=True)
+            else:
+                # Check for session expiry and rotate before recording the new message
+                try:
+                    await check_and_rotate_session(channel_id, self.state, self.clients)
+                except Exception as e:
+                    logger.error(f"[Mention] Error during session rotation for channel {channel_id}: {e}", exc_info=True)
 
-            try:
-                recorded_at = await self.state.add_to_channel_history(channel_id, {
-                    "role": "user",
-                    "name": message.author.display_name,
-                    "user_id": str(message.author.id),
-                    "is_bot": message.author.bot,
-                    "content": resolve_discord_mentions(message),
-                    "timestamp": datetime.now()
-                })
-                recorded = recorded_at is not None
-            except Exception as e:
-                logger.error(f"[Mention] Error adding message to history for channel {channel_id}: {e}", exc_info=True)
+                try:
+                    recorded_at = await self.state.add_to_channel_history(
+                        channel_id, {**entry, "timestamp": datetime.now()})
+                except Exception as e:
+                    logger.error(f"[Mention] Error adding message to history for channel {channel_id}: {e}", exc_info=True)
 
-            # Compact oversized histories into a memory summary so long-running
-            # sessions don't silently lose context off the end of the window.
-            # Runs in the background so the summarization call never delays a reply.
-            schedule_compaction(channel_id, self.state, self.clients)
+                # Compact oversized histories into a memory summary so long-running
+                # sessions don't silently lose context off the end of the window.
+                # Runs in the background so the summarization call never delays a reply.
+                schedule_compaction(channel_id, self.state, self.clients)
+            recorded = recorded_at is not None
 
-        if not is_mentioned:
+        # Other bots and webhooks are kept as context but never answered,
+        # so two bots can't trigger each other in an endless loop
+        if not is_mentioned or message.author.bot or message.webhook_id:
             return
 
         if recorded:
             self._history_anchors[message.id] = recorded_at
         try:
-            await self._respond_to_mention(message, channel_id, recorded)
+            await self._respond_to_mention(message, conversation, recorded, referenced)
         finally:
             self._history_anchors.pop(message.id, None)
 
-    async def _respond_to_mention(self, message: discord.Message, channel_id: str, recorded: bool):
+    async def _respond_to_mention(self, message: discord.Message, conversation: Conversation,
+                                  recorded: bool, referenced=None):
         """Generates and sends the reply to a message that mentioned the bot."""
         # Ensure state manager is available before proceeding
         if not self.state:
@@ -843,122 +750,32 @@ class MentionCommands(commands.Cog):
             await message.channel.send("⚠️ Internal error: State manager not available.")
             return
 
-        logger.info(f"[Mention] Detected mention from {message.author.id} in channel {channel_id}")
+        logger.info(f"[Mention] Detected mention from {message.author.id} in "
+                    f"{conversation.thread_id or conversation.channel_id}")
 
-        # Determine which provider and model to use for this channel
-        provider, model_name = self.state.resolve_model(channel_id)
-        client_to_use = self.clients.get(provider)
-        logger.info(f"[Mention] Provider='{provider}', Model='{model_name}'. Client available: {client_to_use is not None}")
-
+        content = self._strip_mentions(describe_message(message, referenced)) or "Hello!"
         try:
-            # Get the message content without the mention
-            content = self._strip_mentions(message.content) or "Hello!"
-
-            tool_calling_enabled = self.state.get_tool_calling_enabled()
-
-            # Process images if any are attached
-            images = []
-            if client_to_use and hasattr(client_to_use, 'model_supports_vision') and message.attachments:
-                if asyncio.iscoroutinefunction(client_to_use.model_supports_vision):
-                    client_supports_vision = await client_to_use.model_supports_vision(model_name)
-                else:
-                    client_supports_vision = client_to_use.model_supports_vision(model_name)
-                logger.info(f"[Mention] Client '{provider}' model '{model_name}' vision support: {client_supports_vision}")
-
-                if client_supports_vision:
-                    for attachment in message.attachments:
-                        if any(attachment.filename.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                            try:
-                                image_data = await attachment.read()
-                                images.append({
-                                    'data': image_data,
-                                    'type': attachment.content_type or 'image/jpeg'
-                                })
-                            except Exception as e:
-                                await message.channel.send(f"⚠️ Failed to process image {attachment.filename}: {str(e)}")
-
-            # Channel context up to and including this mention. Anchoring
-            # matters: without it, messages from other users that arrive while
-            # this reply is in flight end up after the mention, and the model
-            # answers them instead of the person who summoned it.
-            conversation_context = self._history_for(message, channel_id)
-
-            # Get effective system prompt (persona > channel config > global),
-            # with memory summaries relevant to the current message and this
-            # channel's notes on the speaker and other participants appended
-            channel_system_prompt = self.state.get_effective_system_prompt(
-                channel_id, query=content, speaker_id=str(message.author.id), history=conversation_context)
-
-            # Mentions are recorded above, so history already ends with this
-            # turn, labelled with the speaker's name by the client. Only
-            # append it here if that write failed, so the model still sees it.
-            if not recorded:
-                conversation_context.append({
-                    "role": "user",
-                    "name": message.author.display_name,
-                    "content": content
-                })
-
-            async with message.channel.typing():
-                if not client_to_use or not hasattr(client_to_use, 'send_message_with_history'):
-                    if client_to_use:
-                        logger.error(f"[Mention] Client for provider '{provider}' does not support chat.")
-                        response = f"⚠️ Error: Client for provider '{provider}' does not support chat ('send_message_with_history' missing)."
-                    else:
-                        logger.error(f"[Mention] Client for provider '{provider}' not available.")
-                        response = f"⚠️ Error: Client for provider '{provider}' not available or not initialized."
-                elif tool_calling_enabled:
-                    # Tool-calling path: the model decides whether to call
-                    # tools; results are fed back until it produces text.
-                    tool_context = {
-                        "bot": self.bot,
-                        "state": self.state,
-                        "message": message,
-                        "channel_id": channel_id,
-                        "clients": self.clients,
-                        "cog": self  # For side-effect handlers (reminder, image, search)
-                    }
-                    response = await self._run_tool_loop(
-                        client_to_use, conversation_context, model_name,
-                        channel_system_prompt, images, tool_context
-                    )
-                else:
-                    # Plain conversation path (tool calling disabled)
-                    response = await client_to_use.send_message_with_history(
-                        messages=conversation_context,
-                        model=model_name,
-                        system_prompt=channel_system_prompt,
-                        images=images
-                    )
-                    if isinstance(response, dict):
-                        response = response.get("content") or ""
-
-            if response is None:
-                logger.error("[Mention] No response produced for mention.")
-                await message.channel.send("⚠️ An unexpected response format was received.")
-            elif isinstance(response, str) and response.startswith("⚠️"):
-                # Error string — don't split into chunks, don't add to history
-                await message.channel.send(response)
-            elif isinstance(response, str):
-                # Add assistant's response to history
-                await self.state.add_to_channel_history(channel_id, {
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": datetime.now()
-                })
-
-                # Send in Discord-sized chunks via persona webhook if configured
-                await self._send_reply(message, channel_id, response, conversation_context)
-            else:
-                logger.error(f"[Mention] Unexpected response type: {type(response)}")
-                await message.channel.send("⚠️ An unexpected response format was received.")
-
+            # Mentions are recorded in on_message, so history already ends
+            # with this turn. Anchoring matters: without it, messages from
+            # other users that arrive while this reply is in flight end up
+            # after the mention, and the model answers them instead of the
+            # person who summoned it.
+            await self.service.respond(ReplyRequest(
+                conversation=conversation,
+                author=message.author,
+                content=content,
+                message=message,
+                attachments=list(message.attachments or []),
+                history_until=self._history_anchors.get(message.id),
+                recorded=recorded,
+                feature="mention",
+            ))
         except Exception as e:
-            logger.exception(f"[Mention] Error processing mention in channel {channel_id}: {e}")
+            logger.exception(f"[Mention] Error processing mention in {conversation.channel_id}: {e}")
             try:
-                await message.channel.send(f"⚠️ An unexpected error occurred while processing your mention: {str(e)}")
+                await message.channel.send("⚠️ Something went wrong while I was answering. Please try again.")
             except Exception as followup_e:
-                logger.error(f"[Mention] Failed to send error message to channel {channel_id}: {followup_e}")
+                logger.error(f"[Mention] Failed to send error message: {followup_e}")
 
 
 def setup(bot):

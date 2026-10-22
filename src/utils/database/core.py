@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -18,8 +19,108 @@ from .persona_manager import PersonaManager
 from .backup_manager import BackupManager
 from .memory_manager import MemoryManager
 from .user_memory_manager import UserMemoryManager
+from .usage_manager import UsageManager
+from .event_manager import EventManager
 
 logger = logging.getLogger(__name__)
+
+
+class _LockedCursor:
+    """Cursor whose statements run under the connection's lock."""
+
+    def __init__(self, cursor, lock):
+        self._cursor = cursor
+        self._lock = lock
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.execute(*args, **kwargs)
+        return self
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executemany(*args, **kwargs)
+        return self
+
+    def fetchone(self):
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchall(self):
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def fetchmany(self, *args):
+        with self._lock:
+            return self._cursor.fetchmany(*args)
+
+
+class LockedConnection:
+    """The shared sqlite3 connection, serialized across threads.
+
+    The bot uses one connection from the event loop and from worker threads
+    (``asyncio.to_thread`` writes, the dashboard's ``_db`` jobs). sqlite3
+    makes single calls thread-safe, but ``with conn:`` commit/rollback is
+    connection-wide, so one thread's commit could include another's
+    half-finished writes. A re-entrant lock held for each statement and for
+    the whole of a ``with conn:`` block keeps transactions whole.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.raw = conn
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        return getattr(self.raw, name)
+
+    @property
+    def lock(self):
+        return self._lock
+
+    def cursor(self):
+        return _LockedCursor(self.raw.cursor(), self._lock)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return _LockedCursor(self.raw.execute(*args, **kwargs), self._lock)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return _LockedCursor(self.raw.executemany(*args, **kwargs), self._lock)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self.raw.executescript(*args, **kwargs)
+
+    def commit(self):
+        with self._lock:
+            self.raw.commit()
+
+    def rollback(self):
+        with self._lock:
+            self.raw.rollback()
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            self.raw.__enter__()
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            return self.raw.__exit__(*exc)
+        finally:
+            self._lock.release()
+
 
 class DatabaseManager:
     """Handles all interactions with the SQLite database."""
@@ -37,13 +138,17 @@ class DatabaseManager:
         self._conn = None
         try:
             # Use check_same_thread=False for potential async usage
-            self._conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
+            raw_conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
             # Use Row factory for dictionary-like access to rows
-            self._conn.row_factory = sqlite3.Row
+            raw_conn.row_factory = sqlite3.Row
+            self._conn = LockedConnection(raw_conn)
             # WAL keeps readers from blocking behind writers; NORMAL sync is
             # safe with WAL and avoids an fsync per transaction.
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA synchronous=NORMAL;")
+            # Wait for a competing writer (another connection, e.g. a cog's own
+            # DatabaseManager) instead of failing with "database is locked"
+            self._conn.execute("PRAGMA busy_timeout=5000;")
             logger.info(f"Connected to database: {self.db_path}")
 
             # Initialize schema
@@ -65,6 +170,8 @@ class DatabaseManager:
             self.backup = BackupManager(self._conn, self.db_path)
             self.memory = MemoryManager(self._conn)
             self.user_memory = UserMemoryManager(self._conn)
+            self.usage = UsageManager(self._conn)
+            self.events = EventManager(self._conn)
 
             # Legacy private aliases (older call sites reference these)
             self._config = self.config
@@ -82,6 +189,10 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Database connection error to {self.db_path}: {e}", exc_info=True)
             raise
+
+    def run_migrations(self):
+        """Brings the schema up to date (e.g. after restoring an older backup)."""
+        SchemaManager.initialize(self._conn)
 
     def _get_cursor(self):
         """Returns a cursor for database operations."""
@@ -163,11 +274,12 @@ class DatabaseManager:
 
     # --- Thread Methods (delegate to ThreadManager) ---
 
-    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime):
+    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime,
+                   creator_id: Optional[str] = None):
         """Adds a new thread record."""
         # Ensure the parent channel exists first
         self._ensure_channel_exists(channel_id)
-        return self._threads.add_thread(thread_id, channel_id, name, created_at)
+        return self._threads.add_thread(thread_id, channel_id, name, created_at, creator_id)
 
     def get_thread_info(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Gets information about a specific thread."""
@@ -264,11 +376,11 @@ class DatabaseManager:
     # --- Reminder Methods (delegate to ReminderManager) ---
 
     def add_reminder(self, user_id: str, channel_id: str, message: str,
-                     due_timestamp: datetime) -> int:
-        """Adds a new reminder to the database."""
+                     due_timestamp: datetime, **options) -> int:
+        """Adds a new reminder to the database (options: recurrence, deliver_dm, timezone)."""
         # Ensure parent channel exists
         self._ensure_channel_exists(channel_id)
-        return self._reminders.add_reminder(user_id, channel_id, message, due_timestamp)
+        return self._reminders.add_reminder(user_id, channel_id, message, due_timestamp, **options)
 
     def get_due_reminders(self, current_time: datetime) -> List[Dict[str, Any]]:
         """Gets reminders that are due."""

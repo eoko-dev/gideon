@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [Production]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.12 is what the Docker image runs
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: ruff check src tests
+      - name: Test
+        env:
+          DISCORD_TOKEN: test-token
+          TZ: America/New_York
+        run: python -m unittest discover -s tests -v

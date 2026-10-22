@@ -74,7 +74,18 @@
         memory_summary_enabled: 'setting-memory-summary',
         user_memory_enabled: 'setting-user-memory',
         tool_calling_enabled: 'tool-calling-enabled',
-        tool_calling_max_iterations: 'tool-calling-max-iterations'
+        tool_calling_max_iterations: 'tool-calling-max-iterations',
+        respond_to_everyone: 'setting-respond-everyone',
+        allow_everyone_pings: 'setting-allow-everyone-pings',
+        stream_replies: 'setting-stream-replies',
+        welcome_enabled: 'setting-welcome-enabled',
+        welcome_channel_id: 'setting-welcome-channel',
+        welcome_note: 'setting-welcome-note',
+        max_unprompted_posts_per_hour: 'setting-unprompted-limit',
+        utility_model: 'setting-utility-model',
+        daily_user_cost_budget: 'setting-cost-budget',
+        daily_user_image_limit: 'setting-image-limit',
+        daily_user_video_limit: 'setting-video-limit'
     };
 
     var CHANNEL_FIELD_MAP = {
@@ -84,7 +95,9 @@
         session_timeout_hours: 'channel-edit-timeout',
         memory_summary_enabled: 'channel-edit-summary',
         max_memory_summaries: 'channel-edit-max-summaries',
-        user_memory_enabled: 'channel-edit-user-memory'
+        user_memory_enabled: 'channel-edit-user-memory',
+        respond_to_everyone: 'channel-edit-everyone',
+        allow_everyone_pings: 'channel-edit-allow-pings'
     };
 
     var OVERRIDE_LABELS = {
@@ -94,7 +107,9 @@
         session_timeout_hours: 'Timeout',
         memory_summary_enabled: 'Summaries',
         max_memory_summaries: 'Max summaries',
-        user_memory_enabled: 'Per-user memory'
+        user_memory_enabled: 'Per-user memory',
+        respond_to_everyone: '@everyone',
+        allow_everyone_pings: 'Pings everyone'
     };
 
     var formTrackers = {};
@@ -223,6 +238,8 @@
         formTrackers.settings = G.trackForm($('#settings-form'), 'AI configuration');
         formTrackers.memory = G.trackForm($('#memory-settings-form'), 'Memory system');
         formTrackers.tools = G.trackForm($('#tool-calling-form'), 'Tool calling');
+        formTrackers.costs = G.trackForm($('#cost-controls-form'), 'Cost controls');
+        formTrackers.community = G.trackForm($('#community-form'), 'Community');
         formTrackers.imageProvider = G.trackForm($('#image-provider-form'), 'Active image provider');
         formTrackers.modalities = G.trackForm($('#modalities-form'), 'OpenRouter modalities');
         formTrackers.video = G.trackForm($('#video-config-form'), 'Video defaults');
@@ -738,6 +755,58 @@
             $$('.stat-value.skeleton-text').forEach(function (el) { el.textContent = '--'; el.classList.remove('skeleton-text'); });
         }
         loadRecentErrors();
+        loadUsage();
+    }
+
+    function formatCost(value) {
+        var n = Number(value) || 0;
+        if (n === 0) return '$0';
+        return n < 0.01 ? '<$0.01' : '$' + n.toFixed(2);
+    }
+
+    function formatCount(value) {
+        return (Number(value) || 0).toLocaleString();
+    }
+
+    async function loadUsage() {
+        var box = $('#usage-body');
+        if (!box) return;
+        var days = $('#usage-days') ? $('#usage-days').value : '7';
+        var data;
+        try {
+            data = await api('GET', '/api/usage?days=' + encodeURIComponent(days));
+        } catch (e) {
+            if (e.status === 401) return;
+            box.innerHTML = '<div class="pad muted">Usage unavailable: ' + escapeHtml(describeError(e)) + '</div>';
+            return;
+        }
+        var t = data.totals || {};
+        if (!t.calls) {
+            box.innerHTML = emptyState('check-circle', 'No usage yet', 'LLM calls, images and videos will appear here.');
+            return;
+        }
+        function table(title, rows, labelFn) {
+            if (!rows || !rows.length) return '';
+            return '<div class="usage-table"><h3 class="small muted">' + escapeHtml(title) + '</h3>' +
+                '<div class="table-wrap"><table class="data-table usage-data"><thead><tr><th>Name</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody>' +
+                rows.slice(0, 8).map(function (r) {
+                    return '<tr><td>' + escapeHtml(labelFn(r)) + '</td><td class="num">' + formatCount(r.calls) +
+                        '</td><td class="num">' + formatCount(r.tokens) + '</td><td class="num">' + formatCost(r.cost) + '</td></tr>';
+                }).join('') + '</tbody></table></div></div>';
+        }
+        box.innerHTML =
+            '<dl class="info-list usage-totals">' +
+            '<div class="info-row"><dt>Cost</dt><dd>' + formatCost(t.cost) + '</dd></div>' +
+            '<div class="info-row"><dt>LLM calls</dt><dd>' + formatCount(t.calls - (t.units || 0)) + '</dd></div>' +
+            '<div class="info-row"><dt>Tokens (in / out)</dt><dd>' + formatCount(t.prompt_tokens) + ' / ' + formatCount(t.completion_tokens) + '</dd></div>' +
+            '<div class="info-row"><dt>Cached prompt tokens</dt><dd>' + formatCount(t.cached_tokens) + '</dd></div>' +
+            '<div class="info-row"><dt>Images &amp; videos</dt><dd>' + formatCount(t.units) + '</dd></div>' +
+            '</dl>' +
+            '<div class="grid-3">' +
+            table('By feature', data.by_feature, function (r) { return r.key || 'other'; }) +
+            table('By model', data.by_model, function (r) { return r.key || 'n/a'; }) +
+            table('By person', data.by_user, function (r) { return r.user_name || r.key || 'background'; }) +
+            '</div>';
     }
 
     function setBotStatus(state, text) {
@@ -829,12 +898,28 @@
         $('#tool-calling-enabled').checked = tcEnabled;
         updateToolCallingLabel();
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
+        $('#setting-respond-everyone').value = data.respond_to_everyone === false ? 'false' : 'true';
+        $('#setting-allow-everyone-pings').value = data.allow_everyone_pings ? 'true' : 'false';
+        $('#setting-stream-replies').value = data.stream_replies === false ? 'false' : 'true';
+        $('#setting-welcome-enabled').value = data.welcome_enabled ? 'true' : 'false';
+        $('#setting-welcome-channel').value = data.welcome_channel_id || '';
+        $('#setting-welcome-note').value = data.welcome_note || '';
+        $('#setting-unprompted-limit').value = data.max_unprompted_posts_per_hour != null ? data.max_unprompted_posts_per_hour : 6;
+        var welcomeHint = $('#setting-welcome-hint');
+        if (welcomeHint && data.members_intent === false) {
+            welcomeHint.textContent = 'The bot is running without the Server Members intent, so welcomes won\'t fire. Set MEMBERS_INTENT=TRUE in .env and enable the intent in the Discord Developer Portal.';
+        }
+
+        $('#setting-utility-model').value = data.utility_model || '';
+        $('#setting-cost-budget').value = data.daily_user_cost_budget != null ? data.daily_user_cost_budget : 0;
+        $('#setting-image-limit').value = data.daily_user_image_limit != null ? data.daily_user_image_limit : 25;
+        $('#setting-video-limit').value = data.daily_user_video_limit != null ? data.daily_user_video_limit : 3;
 
         G.clearFieldErrors($('#tab-settings'));
         var searchEl = $('#setting-model-search');
         if (searchEl) searchEl.value = '';
         await loadModelsForProvider(provider, 'setting-model', settingsModel, null);
-        snapshot('settings', 'memory', 'tools');
+        snapshot('settings', 'memory', 'tools', 'costs', 'community');
     }
 
     function updateToolCallingLabel() {
@@ -939,13 +1024,76 @@
         try {
             await api('PUT', '/api/settings', {
                 tool_calling_enabled: $('#tool-calling-enabled').checked,
-                tool_calling_max_iterations: iterations
+                tool_calling_max_iterations: iterations,
+                respond_to_everyone: $('#setting-respond-everyone').value === 'true',
+                allow_everyone_pings: $('#setting-allow-everyone-pings').value === 'true',
+                stream_replies: $('#setting-stream-replies').value === 'true'
             });
             markOwnWrite();
             showSaveStatus('tool-calling-save-status', 'Tool calling settings saved', false);
             snapshot('tools');
         } catch (err) {
             handleFormError(form, 'tool-calling-save-status', err, SETTINGS_FIELD_MAP);
+        }
+        setBusy(btn, false);
+    }
+
+    async function saveCommunitySettings(e) {
+        e.preventDefault();
+        var form = e.currentTarget;
+        G.clearFieldErrors(form);
+        var limit = readInt('setting-unprompted-limit');
+        if (limit === null) {
+            showSaveStatus('community-save-status', 'Fix the highlighted fields', true);
+            return;
+        }
+        var btn = e.submitter;
+        setBusy(btn, true);
+        try {
+            await api('PUT', '/api/settings', {
+                welcome_enabled: $('#setting-welcome-enabled').value === 'true',
+                welcome_channel_id: $('#setting-welcome-channel').value.trim() || null,
+                welcome_note: $('#setting-welcome-note').value.trim() || null,
+                max_unprompted_posts_per_hour: limit
+            });
+            markOwnWrite();
+            showSaveStatus('community-save-status', 'Community settings saved', false);
+            snapshot('community');
+        } catch (err) {
+            handleFormError(form, 'community-save-status', err, SETTINGS_FIELD_MAP);
+        }
+        setBusy(btn, false);
+    }
+
+    async function saveCostControls(e) {
+        e.preventDefault();
+        var form = e.currentTarget;
+        G.clearFieldErrors(form);
+        var imageLimit = readInt('setting-image-limit');
+        var videoLimit = readInt('setting-video-limit');
+        var budgetEl = $('#setting-cost-budget');
+        var budget = parseFloat(String(budgetEl.value).trim());
+        if (isNaN(budget) || budget < 0) {
+            G.setFieldError(budgetEl, 'Enter an amount of 0 or more');
+        }
+        if (imageLimit === null || videoLimit === null || isNaN(budget) || budget < 0) {
+            showSaveStatus('cost-controls-save-status', 'Fix the highlighted fields', true);
+            return;
+        }
+        var btn = e.submitter;
+        setBusy(btn, true);
+        try {
+            await api('PUT', '/api/settings', {
+                utility_model: $('#setting-utility-model').value.trim() || null,
+                daily_user_cost_budget: budget,
+                daily_user_image_limit: imageLimit,
+                daily_user_video_limit: videoLimit
+            });
+            markOwnWrite();
+            showSaveStatus('cost-controls-save-status', 'Cost controls saved', false);
+            snapshot('costs');
+        } catch (err) {
+            handleFormError(form, 'cost-controls-save-status', err, SETTINGS_FIELD_MAP);
         }
         setBusy(btn, false);
     }
@@ -1112,6 +1260,24 @@
                         : formatSummaryFlag(g.user_memory_enabled !== false);
                 },
                 global: function () { return formatSummaryFlag(g.user_memory_enabled !== false); }
+            },
+            {
+                key: 'respond_to_everyone', hint: '#channel-everyone-hint',
+                hasValue: function () { return $('#channel-edit-everyone').value !== ''; },
+                effective: function (source) {
+                    return source === 'channel' ? formatSummaryFlag($('#channel-edit-everyone').value)
+                        : formatSummaryFlag(g.respond_to_everyone !== false);
+                },
+                global: function () { return formatSummaryFlag(g.respond_to_everyone !== false); }
+            },
+            {
+                key: 'allow_everyone_pings', hint: '#channel-allow-pings-hint',
+                hasValue: function () { return $('#channel-edit-allow-pings').value !== ''; },
+                effective: function (source) {
+                    return source === 'channel' ? formatSummaryFlag($('#channel-edit-allow-pings').value)
+                        : formatSummaryFlag(!!g.allow_everyone_pings);
+                },
+                global: function () { return formatSummaryFlag(!!g.allow_everyone_pings); }
             }
         ];
     }
@@ -1178,6 +1344,8 @@
         $('#channel-edit-summary').value = data.memory_summary_enabled == null ? '' : String(data.memory_summary_enabled);
         $('#channel-edit-max-summaries').value = data.max_memory_summaries != null ? data.max_memory_summaries : '';
         $('#channel-edit-user-memory').value = data.user_memory_enabled == null ? '' : String(!!data.user_memory_enabled);
+        $('#channel-edit-everyone').value = data.respond_to_everyone == null ? '' : String(!!data.respond_to_everyone);
+        $('#channel-edit-allow-pings').value = data.allow_everyone_pings == null ? '' : String(!!data.allow_everyone_pings);
 
         var note = $('#channel-persona-note');
         var persona = data.persona;
@@ -1242,13 +1410,17 @@
 
         var summary = $('#channel-edit-summary').value;
         var userMemory = $('#channel-edit-user-memory').value;
+        var everyone = $('#channel-edit-everyone').value;
+        var allowPings = $('#channel-edit-allow-pings').value;
         var body = {
             model: $('#channel-edit-model').value || null,
             system_prompt: $('#channel-edit-prompt').value || null,
             session_timeout_hours: timeout,
             memory_summary_enabled: summary === '' ? null : summary === 'true',
             max_memory_summaries: maxSummaries,
-            user_memory_enabled: userMemory === '' ? null : userMemory === 'true'
+            user_memory_enabled: userMemory === '' ? null : userMemory === 'true',
+            respond_to_everyone: everyone === '' ? null : everyone === 'true',
+            allow_everyone_pings: allowPings === '' ? null : allowPings === 'true'
         };
         if (provider) body.provider = provider;
 
@@ -3455,6 +3627,9 @@
         bindEvent('#settings-form', 'submit', saveSettings);
         bindEvent('#memory-settings-form', 'submit', saveMemorySettings);
         bindEvent('#tool-calling-form', 'submit', saveToolCallingSettings);
+        bindEvent('#cost-controls-form', 'submit', saveCostControls);
+        bindEvent('#community-form', 'submit', saveCommunitySettings);
+        bindEvent('#usage-days', 'change', loadUsage);
         bindEvent('#tool-calling-enabled', 'change', updateToolCallingLabel);
         bindEvent('#setting-provider', 'change', onProviderChange);
         setupModelSearch('setting-model-search', 'setting-model');
@@ -3469,7 +3644,7 @@
         bindEvent('#channel-edit-form', 'submit', saveChannel);
         bindEvent('#channel-reset-btn', 'click', resetChannel);
         bindEvent('#channel-edit-provider', 'change', onChannelProviderChange);
-        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory'].forEach(function (sel) {
+        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory', '#channel-edit-everyone', '#channel-edit-allow-pings'].forEach(function (sel) {
             bindEvent(sel, 'input', updateSourceChips);
             bindEvent(sel, 'change', updateSourceChips);
         });

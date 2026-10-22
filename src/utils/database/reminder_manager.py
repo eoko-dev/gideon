@@ -12,7 +12,8 @@ class ReminderManager:
         self._conn = conn
 
     def add_reminder(self, user_id: str, channel_id: str, message: str,
-                     due_timestamp: datetime) -> int:
+                     due_timestamp: datetime, recurrence: Optional[str] = None,
+                     deliver_dm: bool = False, timezone: Optional[str] = None) -> int:
         """
         Adds a new reminder to the database.
 
@@ -29,13 +30,15 @@ class ReminderManager:
             sqlite3.Error: If database operation fails
         """
         sql = """
-        INSERT INTO REMINDERS (user_id, channel_id, message, due_timestamp, created_at, sent)
-        VALUES (?, ?, ?, ?, ?, 0);
+        INSERT INTO REMINDERS (user_id, channel_id, message, due_timestamp, created_at, sent,
+                               recurrence, deliver_dm, timezone)
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?);
         """
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (user_id, channel_id, message, due_timestamp, datetime.now()))
+                cursor.execute(sql, (user_id, channel_id, message, due_timestamp, datetime.now(),
+                                     recurrence, 1 if deliver_dm else 0, timezone))
                 last_id = cursor.lastrowid
             logger.debug(f"Added reminder (ID: {last_id}) for user {user_id} due at {due_timestamp}")
             return last_id
@@ -55,7 +58,8 @@ class ReminderManager:
                 reminder_id, user_id, channel_id, message, due_timestamp, created_at
         """
         sql = """
-        SELECT reminder_id, user_id, channel_id, message, due_timestamp, created_at
+        SELECT reminder_id, user_id, channel_id, message, due_timestamp, created_at,
+               recurrence, deliver_dm, timezone
         FROM REMINDERS
         WHERE sent = 0 AND due_timestamp <= ?
         ORDER BY due_timestamp ASC;
@@ -104,7 +108,8 @@ class ReminderManager:
             List[Dict[str, Any]]: List of reminder dictionaries ordered by due_timestamp
         """
         sql = """
-        SELECT reminder_id, user_id, channel_id, message, due_timestamp, created_at, sent
+        SELECT reminder_id, user_id, channel_id, message, due_timestamp, created_at, sent,
+               recurrence, deliver_dm, timezone
         FROM REMINDERS
         WHERE user_id = ?
         """
@@ -123,6 +128,21 @@ class ReminderManager:
         except sqlite3.Error as e:
             logger.error(f"Error getting reminders for user '{user_id}': {e}", exc_info=True)
             return []
+
+    def get_reminder(self, reminder_id: int) -> Optional[Dict[str, Any]]:
+        """One reminder by id (sent or not), or None."""
+        row = self._conn.execute(
+            "SELECT reminder_id, user_id, channel_id, message, due_timestamp, created_at, sent, "
+            "recurrence, deliver_dm, timezone FROM REMINDERS WHERE reminder_id = ?;", (reminder_id,)).fetchone()
+        return dict(row) if row else None
+
+    def reschedule(self, reminder_id: int, due_timestamp: datetime) -> bool:
+        """Moves a reminder to a new time and makes it pending again (snooze, next repeat)."""
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE REMINDERS SET due_timestamp = ?, sent = 0 WHERE reminder_id = ?;",
+                (due_timestamp, reminder_id))
+            return cursor.rowcount > 0
 
     def delete_reminder(self, reminder_id: int, user_id: str) -> bool:
         """

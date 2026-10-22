@@ -24,7 +24,8 @@ allowed_models_str = os.getenv('ALLOWED_MODELS', "openai:gpt-4o-mini,openai:gpt-
 ALLOWED_MODELS = [model.strip().replace('/', ':') for model in allowed_models_str.split(',') if model.strip()]
 
 # Default model to use (must include provider in provider/model_name format)
-DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'google/gemini-2.0-flash-exp') # Use slash separator
+# Default model (provider/model_name). The provider must have a client (openrouter, openai, ai_horde).
+DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'openrouter/openai/gpt-4o-mini')
 
 # Data storage configuration
 DATA_DIRECTORY = os.getenv("DATA_DIRECTORY", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"))
@@ -57,7 +58,10 @@ COMFYUI_URL = os.getenv('COMFYUI_URL', '')
 #
 # The INTENT_DISCOVERY env var is kept for backward compatibility — if set to
 # TRUE, it enables tool calling. New installs should use TOOL_CALLING_ENABLED.
-TOOL_CALLING_ENABLED = os.getenv('TOOL_CALLING_ENABLED', '').upper() == 'TRUE'
+# On by default: only @mentions, /chat and threads offer tools. The .env value
+# seeds the database on first start; after that the dashboard/`/settings
+# tools toggle` value wins.
+TOOL_CALLING_ENABLED = os.getenv('TOOL_CALLING_ENABLED', 'TRUE').upper() == 'TRUE'
 INTENT_DISCOVERY = os.getenv('INTENT_DISCOVERY', 'FALSE').upper() == 'TRUE'
 
 # Combined flag: tool calling is enabled if either new or old env var is TRUE
@@ -70,6 +74,11 @@ try:
     TOOL_CALLING_MAX_ITERATIONS = int(os.getenv('TOOL_CALLING_MAX_ITERATIONS', '3'))
 except ValueError:
     TOOL_CALLING_MAX_ITERATIONS = 3
+
+# Privileged "Server Members" intent. Needed for welcoming new members; it must
+# also be switched on in the Discord Developer Portal (Bot → Privileged Gateway
+# Intents) or the bot can't connect.
+MEMBERS_INTENT = os.getenv('MEMBERS_INTENT', 'FALSE').upper() == 'TRUE'
 
 # Dashboard Configuration
 DASHBOARD_ENABLED = os.getenv('DASHBOARD_ENABLED', 'FALSE').upper() == 'TRUE'

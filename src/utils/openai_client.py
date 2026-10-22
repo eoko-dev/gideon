@@ -4,12 +4,45 @@ import asyncio
 from openai import AsyncOpenAI, OpenAIError
 from typing import Dict, Any, Optional, List # Added List import
 
-from .llm_formatting import prepare_llm_messages
+from . import llm_result
+from .llm_formatting import flatten_system_prompt, prepare_llm_messages
+from .llm_result import ChatResult
+from .usage import record_usage
 
 logger = logging.getLogger('openai_client')
 
+def _kind_for_openai_error(error: Exception) -> str:
+    """Maps an openai SDK exception to a ChatResult error kind."""
+    status = getattr(error, "status_code", None)
+    name = type(error).__name__
+    if name == "APITimeoutError":
+        return llm_result.TIMEOUT
+    if name == "APIConnectionError":
+        return llm_result.NETWORK
+    if isinstance(status, int):
+        return llm_result.kind_for_status(status, str(error))
+    return llm_result.PROVIDER
+
+
+def _usage_from(response) -> Dict[str, Any]:
+    """Token counts from an SDK response (OpenAI reports no cost)."""
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return {}
+    details = getattr(usage, "prompt_tokens_details", None)
+    return {
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "cached_tokens": int(getattr(details, "cached_tokens", 0) or 0) if details else 0,
+        "cost": 0.0,
+    }
+
+
 class OpenAIClient:
     """Client for interacting with the OpenAI API for chat completions and image generation."""
+
+    # chat() returns a ChatResult; see llm_result.call_chat
+    supports_chat_result = True
 
     # OpenAI's models endpoint exposes no capability metadata, so vision
     # support is matched by family prefix rather than looked up.
@@ -117,7 +150,14 @@ class OpenAIClient:
             return False
         return name.startswith(self.VISION_MODEL_PREFIXES)
 
-    async def send_message_with_history(self, messages: List[Dict[str, str]], model: str, system_prompt: Optional[str] = None, **kwargs) -> str:
+    async def send_message_with_history(self, messages: List[Dict[str, str]], model: str,
+                                        system_prompt: Optional[str] = None, **kwargs):
+        """Legacy interface: returns text, a tool-call dict, or a "⚠️ ..." error string."""
+        result = await self.chat(messages=messages, model=model, system_prompt=system_prompt, **kwargs)
+        return result.to_legacy()
+
+    async def chat(self, messages: List[Dict[str, Any]], model: str,
+                   system_prompt: Optional[str] = None, **kwargs) -> ChatResult:
         """
         Sends a message to the OpenAI Chat Completions API using conversation history.
 
@@ -136,13 +176,14 @@ class OpenAIClient:
             requested tool execution, or a formatted error string starting with "⚠️ Error: ".
         """
         if not self.client:
-            return "⚠️ OpenAI Error: Client is not initialized (API key missing or invalid)."
+            return ChatResult.failure(llm_result.UNAVAILABLE, model, provider="openai")
 
         api_messages = []
 
         # Add system prompt if provided
         if system_prompt:
-            api_messages.append({"role": "system", "content": system_prompt})
+            # OpenAI caches matching prompt prefixes automatically
+            api_messages.append({"role": "system", "content": flatten_system_prompt(system_prompt)})
 
         # Process images if provided and model supports vision
         images_to_include = []
@@ -159,7 +200,8 @@ class OpenAIClient:
                         })
                     except Exception as e:
                         logger.error(f"Failed to encode image for OpenAI: {e}")
-                        return f"⚠️ OpenAI Error: Failed to process image data - {e}"
+                        return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(e),
+                                                  provider="openai")
 
         # Label user turns with their speaker and drop bookkeeping keys
         messages = prepare_llm_messages(messages)
@@ -228,75 +270,23 @@ class OpenAIClient:
                                 "arguments": tc.function.arguments
                             }
                         })
-                    return {
-                        "content": message.content,
-                        "tool_calls": tool_calls_data
-                    }
-                
-                ai_response = message.content
-                logger.info(f"Received response from OpenAI model '{model}'")
-                return ai_response.strip() if ai_response else ""
-            else:
-                logger.error(f"OpenAI API returned no response choices for model '{model}'. Full response: {response}")
-                return f"⚠️ OpenAI Error: API returned an unexpected response structure."
+                    result = ChatResult(content=message.content, tool_calls=tool_calls_data,
+                                        usage=_usage_from(response), model=model, provider="openai")
+                else:
+                    ai_response = message.content
+                    result = ChatResult(content=ai_response.strip() if ai_response else "",
+                                        usage=_usage_from(response), model=model, provider="openai")
+                record_usage(result)
+                return result
+            logger.error(f"OpenAI API returned no response choices for model '{model}'. Full response: {response}")
+            return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(response)[:500],
+                                      provider="openai")
 
         except OpenAIError as e:
+            # The SDK already retries rate limits, timeouts and 5xx (max_retries)
             logger.error(f"OpenAI API error for model '{model}': {e}")
-            error_message = str(e)
-            if hasattr(e, 'message'):
-                error_message = e.message
-            elif hasattr(e, 'body') and e.body and 'message' in e.body:
-                 error_message = e.body['message']
-            return f"⚠️ OpenAI Error: {error_message}"
+            return ChatResult.failure(_kind_for_openai_error(e), model, detail=str(e)[:500],
+                                      provider="openai")
         except Exception as e:
             logger.exception(f"Unexpected error during OpenAI chat completion for model '{model}': {e}")
-            return f"⚠️ Error: An unexpected error occurred - {str(e)}"
-
-
-# Example usage (for testing purposes)
-async def main():
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        print("Set the OPENAI_API_KEY environment variable to run this test.")
-        return
-
-    logging.basicConfig(level=logging.INFO)
-    client = OpenAIClient(api_key)
-
-    # Test DALL-E 3
-    print("\nTesting DALL-E 3...")
-    result_d3 = await client.generate_image(
-        prompt="A photorealistic image of an astronaut riding a horse on the moon",
-        model="dall-e-3",
-        size="1024x1024",
-        quality="standard",
-        style="vivid"
-    )
-    print(f"DALL-E 3 Result: {result_d3}")
-
-    # Test DALL-E 2
-    print("\nTesting DALL-E 2...")
-    result_d2 = await client.generate_image(
-        prompt="A cute cat wearing a small hat",
-        model="dall-e-2",
-        size="1024x1024" # DALL-E 2 supports this size
-    )
-    print(f"DALL-E 2 Result: {result_d2}")
-
-    # Test Error Handling (e.g., invalid model)
-    # print("\nTesting Error Handling (Invalid Model)...")
-    # result_err = await client.generate_image(
-    #     prompt="Test prompt",
-    #     model="invalid-model",
-    #     size="1024x1024"
-    # )
-    # print(f"Error Result: {result_err}")
-
-if __name__ == "__main__":
-    # Requires OPENAI_API_KEY to be set in environment for testing
-    # asyncio.run(main())
-    pass # Keep __main__ block but don't run by default
+            return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(e), provider="openai")

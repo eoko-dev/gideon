@@ -1053,3 +1053,9 @@ form.is-dirty .btn-primary[type="submit"] { box-shadow: 0 0 0 3px var(--accent-s
     }
     .skeleton, .skeleton-text { animation: none; }
 }
+
+/* Usage card */
+.usage-totals { margin-bottom: var(--space-4); }
+.usage-table h3 { margin: 0 0 var(--space-2); font-weight: 600; }
+.usage-data th.num, .usage-data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-data td, .usage-data th { padding: var(--space-2) var(--space-3); }

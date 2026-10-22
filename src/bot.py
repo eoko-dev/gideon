@@ -17,16 +17,19 @@ from dotenv import load_dotenv
 from .config import (
     DISCORD_TOKEN, OPENROUTER_API_KEY, SYSTEM_PROMPT, DEFAULT_MODEL,
     DATA_DIRECTORY, OPENAI_API_KEY, AI_HORDE_API_KEY, DASHBOARD_ENABLED,
-    ENCRYPTION_MASTER_KEY,
-)
+    ENCRYPTION_MASTER_KEY, MEMBERS_INTENT)
 from .utils.state_manager import BotStateManager
 from .utils.webhook_sender import WebhookSender
+from .utils.conversation_service import ConversationService
+from .utils.budget import make_usage_sink
+from .utils.usage import set_usage_sink
 from .utils.reminder_service import deliver_due_reminders
-from .utils.memory_service import archive_and_prune, llm_clients
+from .utils.memory_service import archive_and_prune, cancel_background_tasks, llm_clients
 from .utils.openrouter_client import OpenRouterClient
 from .utils.openai_client import OpenAIClient
 from .utils.ai_horde_client import AIHordeClient
 from .utils.model_manager import ProviderManager
+from .utils.discord_fmt import SAFE_ALLOWED_MENTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +38,14 @@ load_dotenv()
 # Create intents
 intents = discord.Intents.default()
 intents.message_content = True
+# Privileged; only requested when enabled in .env (and the Developer Portal)
+intents.members = MEMBERS_INTENT
 
 bot = commands.Bot(
     command_prefix="unused!",
     intents=intents,
     sync_commands=False,
+    allowed_mentions=SAFE_ALLOWED_MENTIONS,
 )
 bot.start_time = time.time()
 
@@ -78,7 +84,6 @@ COGS = [
     "src.cogs.chat_commands",
     "src.cogs.thread_commands",
     "src.cogs.config_commands",
-    "src.cogs.diagnostic_commands",
     "src.cogs.mention_commands",
     "src.cogs.unified_image_commands",  # /dream (user) + /dream_manage (admin)
     "src.cogs.video_commands",          # /video (user) + /video_manage (admin)
@@ -88,6 +93,8 @@ COGS = [
     "src.cogs.help_commands",           # Interactive help system
     "src.cogs.dashboard_commands",      # Web admin dashboard
     "src.cogs.persona_commands",        # Per-channel personas with webhooks
+    "src.cogs.context_menu_commands",   # /catchup + message context menus
+    "src.cogs.community_commands",      # Event RSVPs + welcomes
 ]
 
 # These cogs provide slash commands that duplicate dashboard functionality.
@@ -110,6 +117,8 @@ async def _setup_state() -> BotStateManager:
     logger.info(f"State manager initialized. Global model: {state.get_global_model()}")
 
     bot.webhook_sender = WebhookSender(bot)
+    bot.conversation_service = ConversationService(bot)
+    set_usage_sink(make_usage_sink(state))
 
     # Seed built-in persona templates
     from .utils.persona_templates import BUILTIN_TEMPLATES
@@ -298,6 +307,69 @@ async def on_ready():
     logger.info("Ready to serve!")
 
 
+@bot.event
+async def on_application_command_error(ctx, error):
+    """Last-resort handler: every failed slash command gets a short, safe reply.
+
+    Permission and cooldown failures are explained; anything else is logged
+    with its traceback and the user sees a generic message, never the raw
+    exception text.
+    """
+    original = getattr(error, "original", error)
+    if isinstance(error, (commands.MissingPermissions, commands.NotOwner, commands.CheckFailure)):
+        message = "⛔ You don't have permission to use this command."
+    elif isinstance(error, commands.CommandOnCooldown):
+        message = f"⏳ Slow down — try again in {error.retry_after:.0f}s."
+    elif isinstance(original, discord.Forbidden):
+        message = "⚠️ I'm missing a Discord permission needed for that."
+    else:
+        command = getattr(getattr(ctx, "command", None), "qualified_name", "?")
+        logger.error(f"Unhandled error in /{command}", exc_info=(type(original), original, original.__traceback__))
+        message = "⚠️ Something went wrong running that command. The error has been logged."
+    try:
+        if ctx.response.is_done():
+            await ctx.followup.send(message, ephemeral=True)
+        else:
+            await ctx.respond(message, ephemeral=True)
+    except Exception as send_error:
+        logger.debug(f"Could not report command error to the user: {send_error}")
+
+
+async def _shutdown_cleanup():
+    """Stops background work and closes HTTP sessions before the DB closes."""
+    for task in (prune_data_task, check_reminders_task):
+        if task.is_running():
+            task.cancel()
+    await cancel_background_tasks()
+    server = getattr(bot, "dashboard_server", None)
+    if server is not None:
+        try:
+            await server.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping dashboard: {e}")
+
+    # Provider clients on the bot and on cogs hold aiohttp sessions
+    holders = [getattr(bot, name, None) for name in ("openrouter_client", "openai_client", "ai_horde_client")]
+    for cog in list(bot.cogs.values()):
+        holders.extend(value for name, value in vars(cog).items() if name.endswith("_client"))
+        if hasattr(cog, "_fetch_session"):
+            holders.append(getattr(cog, "_fetch_session"))
+    seen = set()
+    for holder in holders:
+        if holder is None or id(holder) in seen:
+            continue
+        seen.add(id(holder))
+        close = getattr(holder, "close_session", None) or getattr(holder, "close", None)
+        if close is None:
+            continue
+        try:
+            result = close()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            logger.debug(f"Error closing {type(holder).__name__}: {e}")
+
+
 # ─── Background tasks ────────────────────────────────────────────────────────
 
 @tasks.loop(hours=24)  # Default interval, adjusted in _start_background_tasks
@@ -357,6 +429,10 @@ async def main():
             await _ensure_setup()
             await bot.start(DISCORD_TOKEN)
     finally:
+        try:
+            await _shutdown_cleanup()
+        except Exception:
+            logger.exception("Error during shutdown cleanup")
         if hasattr(bot, 'state_manager'):
             bot.state_manager.close_db()
         logger.info("Shutdown complete.")

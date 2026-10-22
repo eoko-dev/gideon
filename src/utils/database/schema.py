@@ -198,6 +198,51 @@ class SchemaManager:
             updated_at DATETIME NOT NULL,
             PRIMARY KEY (channel_id, user_id)
         );
+        """,
+        # LLM token/cost usage and generation counts, attributed to the
+        # feature, user and channel that caused them
+        """
+        CREATE TABLE IF NOT EXISTS USAGE (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at DATETIME NOT NULL,
+            feature TEXT NOT NULL,
+            user_id TEXT,
+            channel_id TEXT,
+            provider TEXT,
+            model TEXT,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            cost REAL NOT NULL DEFAULT 0,
+            units INTEGER NOT NULL DEFAULT 0
+        );
+        """,
+        # Events Gideon scheduled, with an RSVP card message
+        """
+        CREATE TABLE IF NOT EXISTS EVENTS (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT,
+            channel_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            start_time DATETIME NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 60,
+            discord_event_id TEXT,
+            card_message_id TEXT,
+            created_by TEXT,
+            created_at DATETIME NOT NULL
+        );
+        """,
+        # One RSVP per person per event; reminder_id is their "starting soon" reminder
+        """
+        CREATE TABLE IF NOT EXISTS EVENT_RSVPS (
+            event_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reminder_id INTEGER,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        );
         """
     ]
 
@@ -222,7 +267,9 @@ class SchemaManager:
         """CREATE INDEX IF NOT EXISTS idx_persona_templates_builtin ON PERSONA_TEMPLATES (is_builtin);""",
         """CREATE INDEX IF NOT EXISTS idx_channel_memory_channel_id ON CHANNEL_MEMORY (channel_id);""",
         """CREATE INDEX IF NOT EXISTS idx_channel_memory_created_at ON CHANNEL_MEMORY (channel_id, created_at);""",
-        """CREATE INDEX IF NOT EXISTS idx_channel_user_memory_user ON CHANNEL_USER_MEMORY (user_id);"""
+        """CREATE INDEX IF NOT EXISTS idx_channel_user_memory_user ON CHANNEL_USER_MEMORY (user_id);""",
+        """CREATE INDEX IF NOT EXISTS idx_usage_created_at ON USAGE (created_at);""",
+        """CREATE INDEX IF NOT EXISTS idx_usage_user_created ON USAGE (user_id, created_at);"""
     ]
 
     @staticmethod
@@ -242,25 +289,89 @@ class SchemaManager:
 
                 logger.info("Database schema creation/verification complete.")
 
-                # Run migrations
-                SchemaManager._migrate_remove_news_feeds(cursor)
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "provider", "TEXT")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "session_timeout_hours", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "memory_summary_enabled", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "max_memory_summaries", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_MEMORY", "conversation_start", "DATETIME")
-                SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "user_name", "TEXT")
-                SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "is_bot", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "user_memory_enabled", "INTEGER")
-                SchemaManager._create_memory_fts(cursor)
-
-                logger.info("Database schema migration checks complete.")
+            SchemaManager.migrate(conn)
         except sqlite3.Error as e:
             logger.error(f"Error initializing/migrating database schema: {e}", exc_info=True)
             raise
 
+    # ─── Versioned migrations ───────────────────────────────────────────────
+    #
+    # The database records the last migration it ran in PRAGMA user_version.
+    # Each migration runs once, in order, in its own transaction. To change
+    # the schema, append a new (version, function) pair — never edit or
+    # reorder an existing one. A restored backup from an older schema is
+    # brought forward the next time initialize()/migrate() runs.
+
     @staticmethod
-    def _create_memory_fts(cursor):
+    def _migration_1_baseline(cursor):
+        """Everything added before migrations were versioned (idempotent)."""
+        SchemaManager._migrate_remove_news_feeds(cursor)
+        for table, column, column_type in (
+            ("CHANNEL_CONFIG", "provider", "TEXT"),
+            ("CHANNEL_CONFIG", "session_timeout_hours", "INTEGER"),
+            ("CHANNEL_CONFIG", "memory_summary_enabled", "INTEGER"),
+            ("CHANNEL_CONFIG", "max_memory_summaries", "INTEGER"),
+            ("CHANNEL_MEMORY", "conversation_start", "DATETIME"),
+            ("MESSAGES", "user_name", "TEXT"),
+            ("MESSAGES", "is_bot", "INTEGER"),
+            ("CHANNEL_CONFIG", "user_memory_enabled", "INTEGER"),
+        ):
+            SchemaManager._add_column_if_not_exists(cursor, table, column, column_type)
+        SchemaManager._create_memory_fts(cursor, rebuild=True)
+
+    @staticmethod
+    def _migration_2_thread_creator(cursor):
+        SchemaManager._add_column_if_not_exists(cursor, "THREADS", "creator_id", "TEXT")
+        # Messages of threads deleted before deletes cleaned up after themselves
+        cursor.execute("DELETE FROM MESSAGES WHERE thread_id IS NOT NULL "
+                       "AND thread_id NOT IN (SELECT thread_id FROM THREADS);")
+
+    @staticmethod
+    def _migration_3_respond_to_everyone(cursor):
+        # NULL = inherit the global respond_to_everyone setting
+        SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "respond_to_everyone", "INTEGER")
+
+    @staticmethod
+    def _migration_4_reminder_options(cursor):
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "recurrence", "TEXT")
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "deliver_dm", "INTEGER DEFAULT 0")
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "timezone", "TEXT")
+
+    @staticmethod
+    def _migration_5_allow_everyone_pings(cursor):
+        # NULL = inherit the global allow_everyone_pings setting
+        SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "allow_everyone_pings", "INTEGER")
+
+    MIGRATIONS = (
+        (1, "_migration_1_baseline"),
+        (2, "_migration_2_thread_creator"),
+        (3, "_migration_3_respond_to_everyone"),
+        (4, "_migration_4_reminder_options"),
+        (5, "_migration_5_allow_everyone_pings"),
+    )
+
+    @staticmethod
+    def schema_version() -> int:
+        return SchemaManager.MIGRATIONS[-1][0]
+
+    @staticmethod
+    def migrate(conn):
+        """Runs every migration newer than the database's user_version."""
+        current = conn.execute("PRAGMA user_version;").fetchone()[0]
+        # The FTS index is maintained by triggers; only make sure it exists
+        with conn:
+            SchemaManager._create_memory_fts(conn.cursor(), rebuild=False)
+        for version, name in SchemaManager.MIGRATIONS:
+            if version <= current:
+                continue
+            with conn:
+                getattr(SchemaManager, name)(conn.cursor())
+                # PRAGMA can't take parameters; version is a trusted int
+                conn.execute(f"PRAGMA user_version = {int(version)};")
+            logger.info(f"Database migrated to schema version {version} ({name}).")
+
+    @staticmethod
+    def _create_memory_fts(cursor, rebuild: bool = False):
         """Creates the FTS5 index over CHANNEL_MEMORY summaries (with sync triggers)."""
         try:
             cursor.execute("""
@@ -283,8 +394,9 @@ class SchemaManager:
                     INSERT INTO memory_fts(rowid, summary) VALUES (new.id, new.summary);
                 END;
             """)
-            # Index any summaries that predate the FTS table
-            cursor.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');")
+            if rebuild:
+                # Index any summaries that predate the FTS table
+                cursor.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');")
             logger.debug("memory_fts FTS5 index verified.")
         except sqlite3.Error as e:
             # FTS5 may be unavailable in exotic SQLite builds — memory search
@@ -305,7 +417,6 @@ class SchemaManager:
         for table in tables_to_drop:
             try:
                 cursor.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info(f"Migration: Dropped news feed table '{table}'")
             except sqlite3.Error as e:
                 logger.warning(f"Could not drop table '{table}': {e}")
 

@@ -2,159 +2,89 @@
 import discord
 import logging
 from discord.ext import commands
-from typing import Dict, List, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-# Command categories with their commands and descriptions
-COMMAND_CATEGORIES: Dict[str, Dict] = {
-    "chat": {
-        "emoji": "💬",
-        "name": "Chat & AI",
-        "description": "Interact with the AI assistant",
-        "commands": [
-            {"name": "/chat", "description": "Send a message to the AI (supports image uploads for vision models)"},
-            {"name": "/search", "description": "Search the web for current information using AI"},
-            {"name": "/reset", "description": "Clear the conversation history for the current channel"},
-            {"name": "/summarize", "description": "Summarize the current conversation history"},
-            {"name": "/memory status", "description": "Show this channel's memory status"},
-            {"name": "/memory me", "description": "See what Gideon remembers about you in this channel"},
-            {"name": "/memory forget", "description": "Delete Gideon's notes about you (this channel or everywhere)"},
-            {"name": "/memory optout / optin", "description": "Stop or resume per-user memory for you, everywhere"},
-        ],
-        "admin_only": False
-    },
-    "url": {
-        "emoji": "🔗",
-        "name": "URL Tools",
-        "description": "Summarize and analyze web content",
-        "commands": [
-            {"name": "/summarizeurl", "description": "Fetch and summarize the content of a given URL"},
-        ],
-        "admin_only": False
-    },
-    "threads": {
-        "emoji": "🧵",
-        "name": "Threads",
-        "description": "Manage AI conversation threads",
-        "commands": [
-            {"name": "/thread new", "description": "Create a new AI conversation thread"},
-            {"name": "/thread message", "description": "Send a message to a specific thread"},
-            {"name": "/thread list", "description": "View all active AI threads in the channel"},
-            {"name": "/thread show", "description": "View thread configuration settings"},
-            {"name": "/thread model", "description": "Set the AI model for this thread"},
-            {"name": "/thread system", "description": "Set the system prompt for this thread"},
-            {"name": "/thread rename", "description": "Change the name of an AI thread"},
-            {"name": "/thread delete", "description": "Remove an AI thread and its history"},
-        ],
-        "admin_only": False
-    },
-    "trivia": {
-        "emoji": "🎮",
-        "name": "Trivia",
-        "description": "Play AI-generated trivia games",
-        "commands": [
-            {"name": "/trivia start", "description": "Start a new trivia game (solo or competitive mode)"},
-            {"name": "/trivia stop", "description": "End the current trivia game"},
-            {"name": "/trivia stats", "description": "View your trivia statistics or another player's stats"},
-            {"name": "/trivia leaderboard", "description": "View server rankings (daily/weekly/monthly/all-time)"},
-            {"name": "/trivia achievements", "description": "Display your earned achievement badges"},
-        ],
-        "admin_only": False
-    },
-    "images": {
-        "emoji": "🎨",
-        "name": "Images",
-        "description": "Generate AI images with multiple providers",
-        "commands": [
-            {"name": "/dream", "description": "Generate an image using the configured AI backend"},
-        ],
-        "admin_commands": [
-            {"name": "/dream_manage set_provider", "description": "Set the active image provider (AI Horde/Cloudflare/OpenAI/ComfyUI)"},
-            {"name": "/dream_manage view_config", "description": "View current image generation configuration"},
-            {"name": "/dream_manage configure ai_horde", "description": "Configure AI Horde defaults (model, size, steps)"},
-            {"name": "/dream_manage configure cloudflare", "description": "Configure Cloudflare defaults (size, steps, seed)"},
-            {"name": "/dream_manage configure openai", "description": "Configure OpenAI/DALL-E defaults (model, quality, style)"},
-            {"name": "/dream_manage configure comfyui", "description": "Configure ComfyUI defaults (model, size, steps)"},
-            {"name": "/dream_manage comfyui_models", "description": "List available ComfyUI checkpoint models"},
-            {"name": "/dream_manage comfyui_test", "description": "Test ComfyUI server connection"},
-            {"name": "/dream_manage comfyui_workflow", "description": "Set a custom ComfyUI workflow (JSON)"},
-        ],
-        "admin_only": False
-    },
-    "videos": {
-        "emoji": "🎬",
-        "name": "Videos",
-        "description": "Generate AI videos via OpenRouter",
-        "commands": [
-            {"name": "/video", "description": "Generate a video from a text prompt (model, duration, aspect ratio, resolution, audio, seed, image_url)"},
-        ],
-        "admin_commands": [
-            {"name": "/video_manage view_config", "description": "View current video generation configuration"},
-            {"name": "/video_manage models", "description": "List available video generation models"},
-            {"name": "/video_manage configure", "description": "Set defaults for /video (model, duration, aspect ratio, resolution, audio)"},
-        ],
-        "admin_only": False
-    },
-    "reminders": {
-        "emoji": "⏰",
-        "name": "Reminders",
-        "description": "Set and manage reminders",
-        "commands": [
-            {"name": "/remind set", "description": "Set a new reminder with natural language time"},
-            {"name": "/remind list", "description": "View your active reminders"},
-            {"name": "/remind remove", "description": "Remove a reminder"},
-        ],
-        "admin_only": False
-    },
-    "settings": {
-        "emoji": "⚙️",
-        "name": "Settings",
-        "description": "Configure bot settings (Admin only)",
-        "commands": [
-            {"name": "/settings show", "description": "View all current global settings"},
-            {"name": "/settings model", "description": "Set global AI model (format: provider/model)"},
-            {"name": "/settings system", "description": "Set global system prompt"},
-            {"name": "/settings provider", "description": "Set global AI provider (openrouter/openai)"},
-            {"name": "/settings memory", "description": "Set message history limit"},
-            {"name": "/settings window", "description": "Set time window for history (hours)"},
-            {"name": "/settings restore", "description": "Reset all settings to defaults"},
-            {"name": "/channel show", "description": "View current channel settings"},
-            {"name": "/channel model", "description": "Set AI model for this channel"},
-            {"name": "/channel system", "description": "Set system prompt for this channel"},
-            {"name": "/channel provider", "description": "Set AI provider for this channel"},
-            {"name": "/channel reset", "description": "Clear all channel overrides"},
-            {"name": "/channel list", "description": "List all channels with custom settings"},
-        ],
-        "admin_only": True
-    },
-    "admin": {
-        "emoji": "🔐",
-        "name": "Admin",
-        "description": "Administrative tools (Admin only)",
-        "commands": [
-            {"name": "/admin sync", "description": "Sync slash commands with Discord (Owner only)"},
-            {"name": "/admin debug", "description": "Show debug information"},
-            {"name": "/admin state", "description": "Display database state information"},
-            {"name": "/admin diagnostic", "description": "Run system diagnostics"},
-            {"name": "/admin vision_models", "description": "List all vision-capable AI models"},
-            {"name": "/admin prune", "description": "Set data pruning frequency"},
-            {"name": "/admin retention", "description": "Set summary retention period"},
-        ],
-        "admin_only": True
-    }
-}
+# Categories group commands by their top-level name. The commands themselves
+# (names, descriptions, subcommands) are read from the bot's registered
+# application commands, so /help can't drift from what actually exists.
+CATEGORY_DEFS = [
+    ("chat", "💬", "Chat & AI", "Talk to Gideon and manage what it remembers",
+     ["chat", "search", "reset", "summarize", "memory", "setprovider"]),
+    ("threads", "🧵", "Threads", "AI conversation threads", ["thread"]),
+    ("tools", "🔗", "Tools", "Summaries, reminders and catch-ups",
+     ["summarize_url", "remind", "listreminders", "cancelreminder", "catchup", "me"]),
+    ("trivia", "🎮", "Trivia", "AI-generated trivia games", ["trivia"]),
+    ("images", "🎨", "Images & video", "Generate images and videos", ["dream", "dream_manage", "video", "video_manage"]),
+    ("personas", "🎭", "Personas", "Per-channel personas (admin)", ["persona"]),
+    ("settings", "⚙️", "Settings", "Bot and channel configuration (admin)", ["settings", "channel"]),
+    ("admin", "🔐", "Admin", "Administrative tools", ["admin", "dashboard"]),
+]
+
+# Top-level commands that are admin-only even if Discord doesn't gate them
+ADMIN_ROOTS = {"settings", "channel", "admin", "dream_manage", "video_manage", "dashboard", "persona"}
+
+
+def _is_admin_root(root) -> bool:
+    if root.name in ADMIN_ROOTS:
+        return True
+    perms = getattr(root, "default_member_permissions", None)
+    return bool(perms is not None and getattr(perms, "value", 0))
+
+
+def iter_slash_commands(commands_list, root=None, prefix=""):
+    """Yields (command, root, full name) for every invocable slash command."""
+    for command in commands_list:
+        top = root or command
+        name = f"{prefix}{command.name}"
+        if isinstance(command, discord.SlashCommandGroup):
+            yield from iter_slash_commands(command.subcommands, top, f"{name} ")
+        elif isinstance(command, discord.SlashCommand):
+            yield command, top, name
+
+
+def build_categories(bot) -> Dict[str, Dict]:
+    """Builds the help categories from the bot's registered commands."""
+    categories = {key: {"emoji": emoji, "name": name, "description": desc, "commands": [],
+                        "admin_commands": [], "roots": set(roots)}
+                  for key, emoji, name, desc, roots in CATEGORY_DEFS}
+    other = {"emoji": "📦", "name": "Other", "description": "Everything else", "commands": [],
+             "admin_commands": [], "roots": set()}
+    menus = {"emoji": "🖱️", "name": "Message menu",
+             "description": "Right-click (or long-press) a message → Apps", "commands": [],
+             "admin_commands": [], "roots": set()}
+
+    # pending_application_commands is everything the cogs registered;
+    # application_commands is only filled once Discord has synced them
+    registered = list(getattr(bot, "pending_application_commands", None) or bot.application_commands)
+    for command, root, full_name in sorted(iter_slash_commands(registered), key=lambda t: t[2]):
+        target = next((c for c in categories.values() if root.name in c["roots"]), other)
+        entry = {"name": f"/{full_name}", "description": command.description or ""}
+        target["admin_commands" if _is_admin_root(root) else "commands"].append(entry)
+
+    for command in registered:
+        if isinstance(command, discord.MessageCommand):
+            menus["commands"].append({"name": command.name, "description": "Message context menu"})
+
+    result = {}
+    for key, category in list(categories.items()) + [("menus", menus), ("other", other)]:
+        if category["commands"] or category["admin_commands"]:
+            category["admin_only"] = not category["commands"]
+            result[key] = category
+    return result
 
 
 class CategorySelect(discord.ui.Select):
     """Dropdown menu for selecting help categories."""
 
-    def __init__(self, is_admin: bool = False):
+    def __init__(self, categories: Dict[str, Dict], is_admin: bool = False):
         self.is_admin = is_admin
+        self.categories = categories
 
         # Build options based on available categories
         options = []
-        for key, category in COMMAND_CATEGORIES.items():
+        for key, category in categories.items():
             # Skip admin categories for non-admins
             if category["admin_only"] and not is_admin:
                 continue
@@ -178,7 +108,7 @@ class CategorySelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         """Handle category selection."""
         selected_key = self.values[0]
-        category = COMMAND_CATEGORIES.get(selected_key)
+        category = self.categories.get(selected_key)
 
         if not category:
             await interaction.response.send_message("Category not found.", ephemeral=True)
@@ -191,9 +121,9 @@ class CategorySelect(discord.ui.Select):
 class HelpView(discord.ui.View):
     """View containing the help navigation components."""
 
-    def __init__(self, is_admin: bool = False, timeout: float = 180):
+    def __init__(self, categories: Dict[str, Dict], is_admin: bool = False, timeout: float = 180):
         super().__init__(timeout=timeout)
-        self.add_item(CategorySelect(is_admin=is_admin))
+        self.add_item(CategorySelect(categories, is_admin=is_admin))
 
     async def on_timeout(self):
         """Disable components after timeout."""
@@ -281,22 +211,26 @@ def build_category_embed(category: Dict, is_admin: bool = False) -> discord.Embe
     return embed
 
 
-def build_overview_embed(is_admin: bool = False) -> discord.Embed:
+def build_overview_embed(categories: Dict[str, Dict], is_admin: bool = False,
+                         tools_enabled: bool = True) -> discord.Embed:
     """Build the main help overview embed."""
-    embed = discord.Embed(
-        title="Gideon Help",
-        description="Select a category below to view available commands.\n\n"
-                    "You can also @mention me with natural language for:\n"
-                    "• **Reminders**: \"remind me to check logs tomorrow at 3pm\"\n"
-                    "• **Images**: \"draw a sunset over mountains\"\n"
-                    "• **Search**: \"what are the best games on Game Pass\"\n"
-                    "• **Chat**: Any other message for conversation",
-        color=discord.Color.blurple()
-    )
+    description = "Select a category below to view available commands.\n\n"
+    if tools_enabled:
+        description += ("You can also @mention me in plain language, for example:\n"
+                        "• \"remind me to check the logs tomorrow at 3pm\"\n"
+                        "• \"draw a sunset over mountains\"\n"
+                        "• \"what's the latest on the Artemis mission?\" (web search)\n"
+                        "• \"make a poll: pizza or tacos?\" · \"roll 2d20\" · \"what's 15% of 80?\"\n"
+                        "• \"what did Sam say about the raid?\" · \"what's pinned here?\"\n"
+                        "• \"remember that I'm vegetarian\" · \"what are my reminders?\"\n"
+                        "Replying to one of my messages works too.")
+    else:
+        description += "You can also @mention me to chat. (Natural-language tools are turned off.)"
+    embed = discord.Embed(title="Gideon Help", description=description, color=discord.Color.blurple())
 
     # Add category summary
     categories_text = []
-    for key, category in COMMAND_CATEGORIES.items():
+    for key, category in categories.items():
         if category["admin_only"] and not is_admin:
             continue
 
@@ -338,8 +272,11 @@ class HelpCommands(commands.Cog, name="HelpCommands"):
             if member:
                 is_admin = member.guild_permissions.administrator
 
-        embed = build_overview_embed(is_admin=is_admin)
-        view = HelpView(is_admin=is_admin)
+        categories = build_categories(self.bot)
+        state = getattr(self.bot, "state_manager", None)
+        tools_enabled = bool(state.get_tool_calling_enabled()) if state else False
+        embed = build_overview_embed(categories, is_admin=is_admin, tools_enabled=tools_enabled)
+        view = HelpView(categories, is_admin=is_admin)
 
         await ctx.respond(embed=embed, view=view, ephemeral=True)
 
