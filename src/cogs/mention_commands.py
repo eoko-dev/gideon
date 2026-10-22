@@ -13,7 +13,6 @@ from ..utils.conversation_service import Conversation, ConversationService, Repl
 from ..utils.llm_result import call_chat
 from ..utils.tool_registry import untrusted_block
 from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
-from ..utils.timeutil import to_epoch
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
 from ..utils.llm_formatting import describe_message, resolve_discord_mentions
 from ..config import DEFAULT_MODEL
@@ -163,80 +162,53 @@ class MentionCommands(commands.Cog):
         message: discord.Message,
         channel_id: str,
         reminder_message: str,
-        time_expression: str
+        time_expression: str,
+        deliver_by_dm: bool = False,
     ):
         """
-        Handle a reminder request detected from a mention.
+        Handle a reminder request from the set_reminder tool.
 
-        Posts a confirmation and returns None on success; on failure posts
-        nothing and returns the reason for the model to relay.
-
-        Args:
-            message: Original Discord message object
-            channel_id: Channel ID as string
-            reminder_message: What to remind about
-            time_expression: Natural language time expression
+        ``time_expression`` may repeat ("every monday at 9am") and is read in
+        the user's timezone. Posts a confirmation and returns None on success;
+        on failure posts nothing and returns the reason for the model to relay.
         """
-        # Validate inputs
         if not reminder_message or not reminder_message.strip():
-            logger.warning(f"[Tool] Missing reminder message for user {message.author.id}")
-            return "I detected you want a reminder, but I'm not sure what to remind you about. " "Please try something like: '@Gideon remind me in 2 hours to check the oven'" 
-
+            return "It isn't clear what to remind the user about. Ask them."
         if not time_expression or not time_expression.strip():
-            logger.warning(f"[Tool] Missing time expression for user {message.author.id}")
-            return "I detected you want a reminder, but I'm not sure when. " "Please specify a time like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
+            return "It isn't clear when to remind the user. Ask for a time like 'in 2 hours' or 'tomorrow at 3pm'."
 
-        # Get ReminderCommands cog
         reminder_cog = self.bot.get_cog('ReminderCommands')
         if not reminder_cog:
             logger.error("[Tool] ReminderCommands cog not found")
             return "The reminder system isn't available right now."
 
-        # Parse time using existing method
         try:
-            parsed_time = await reminder_cog.parse_time_with_ai(time_expression, channel_id)
+            plan = await reminder_cog.plan_reminder(time_expression, channel_id, message.author)
         except Exception as e:
             logger.error(f"[Tool] Error parsing time: {e}", exc_info=True)
-            return f"Failed to parse time expression '{time_expression}'. " f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
+            plan = None
+        if plan is None:
+            tip = ("" if self.state.get_user_timezone_name(str(message.author.id))
+                   else " (The user hasn't set a timezone; /me timezone fixes that.)")
+            return (f"'{time_expression}' couldn't be understood as a future time. Ask for something like "
+                    f"'in 2 hours', 'tomorrow at 3pm' or 'every monday at 9am'.{tip}")
+        if plan["due"] > datetime.now() + timedelta(days=366):
+            return "Reminders can be at most a year away."
 
-        if parsed_time is None:
-            logger.warning(f"[Tool] Failed to parse time expression: {time_expression}")
-            return f"I couldn't understand the time '{time_expression}'. " f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'at 5pm'" 
-
-        # Validate time is not too far in the future (max 1 year)
-        max_future = datetime.now() + timedelta(days=365)
-        if parsed_time > max_future:
-            logger.warning(f"[Tool] Reminder time too far in future: {parsed_time}")
-            return "Reminder time is too far in the future (max 1 year)." 
-
-        # Save reminder to database
         try:
             user_id = str(message.author.id)
             # Deliver where it was asked for (a thread, if it was asked in one)
             reminder_id = self.state.add_reminder(
-                user_id=user_id,
-                channel_id=str(message.channel.id),
-                message=reminder_message,
-                due_timestamp=parsed_time
-            )
-
-            # Discord timestamp (shows in each user's own timezone)
-            discord_timestamp = to_epoch(parsed_time)
-
-            # Format confirmation matching /remind command
-            confirmation_message = (
-                f"✅ Reminder set!\n"
-                f"**Message:** {reminder_message}\n"
-                f"**When:** <t:{discord_timestamp}:F> (<t:{discord_timestamp}:R>)\n"
-                f"**Reminder ID:** {reminder_id}"
-            )
-
+                user_id=user_id, channel_id=str(message.channel.id), message=reminder_message,
+                due_timestamp=plan["due"], recurrence=plan["recurrence"], deliver_dm=bool(deliver_by_dm),
+                timezone=plan["timezone"])
+            from .reminder_commands import format_confirmation
+            confirmation_message = format_confirmation(reminder_id, reminder_message, plan["due"],
+                                                       plan["recurrence"], bool(deliver_by_dm))
             # Send confirmation (through the persona webhook when one is active)
             await self.bot.webhook_sender.send_response(message.channel, confirmation_message, channel_id)
             await self.record_tool_note(message, channel_id, confirmation_message)
-
-            logger.info(f"[Tool] User {user_id} set reminder {reminder_id} for {parsed_time} via mention")
-
+            logger.info(f"[Tool] User {user_id} set reminder {reminder_id} for {plan['due']} via mention")
         except Exception as e:
             logger.exception(f"[Tool] Error setting reminder: {e}")
             return "The reminder could not be saved."

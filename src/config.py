@@ -75,6 +75,11 @@ try:
 except ValueError:
     TOOL_CALLING_MAX_ITERATIONS = 3
 
+# Privileged "Server Members" intent. Needed for welcoming new members; it must
+# also be switched on in the Discord Developer Portal (Bot → Privileged Gateway
+# Intents) or the bot can't connect.
+MEMBERS_INTENT = os.getenv('MEMBERS_INTENT', 'FALSE').upper() == 'TRUE'
+
 # Dashboard Configuration
 DASHBOARD_ENABLED = os.getenv('DASHBOARD_ENABLED', 'FALSE').upper() == 'TRUE'
 DASHBOARD_PORT = int(os.getenv('DASHBOARD_PORT', '8080'))

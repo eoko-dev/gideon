@@ -52,11 +52,12 @@ SETTINGS_INT_RANGES = {
     'tool_calling_max_iterations': (1, 10),
     'daily_user_image_limit': (0, 1000),
     'daily_user_video_limit': (0, 1000),
+    'max_unprompted_posts_per_hour': (0, 60),
 }
 # Daily per-user LLM spend cap in USD (0 = unlimited)
 COST_BUDGET_RANGE = (0.0, 1000.0)
 SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled',
-                        'respond_to_everyone', 'stream_replies')
+                        'respond_to_everyone', 'stream_replies', 'welcome_enabled')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
@@ -542,6 +543,11 @@ class DashboardServer:
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
             'respond_to_everyone': state.get_respond_to_everyone(),
             'stream_replies': state.get_stream_replies(),
+            'max_unprompted_posts_per_hour': state.get_max_unprompted_posts_per_hour(),
+            'welcome_enabled': state.get_welcome_enabled(),
+            'welcome_channel_id': state.get_welcome_channel_id(),
+            'welcome_note': state.get_welcome_note(),
+            'members_intent': bool(getattr(getattr(self.bot, 'intents', None), 'members', False)),
             'utility_model': state.get_utility_model(),
             'daily_user_cost_budget': state.get_daily_user_cost_budget(),
             'daily_user_image_limit': state.get_daily_user_image_limit(),
@@ -598,6 +604,22 @@ class DashboardServer:
             else:
                 parsed['daily_user_cost_budget'] = float(value)
 
+        if 'welcome_channel_id' in data:
+            value = data['welcome_channel_id']
+            if value in (None, ''):
+                parsed['welcome_channel_id'] = None
+            elif not re.fullmatch(r'\d{5,25}', str(value).strip()):
+                errors['welcome_channel_id'] = 'welcome_channel_id must be a channel ID (digits) or null'
+            else:
+                parsed['welcome_channel_id'] = str(value).strip()
+
+        if 'welcome_note' in data:
+            value = data['welcome_note']
+            if value is not None and (not isinstance(value, str) or len(value) > 1000):
+                errors['welcome_note'] = 'welcome_note must be text up to 1000 characters, or null'
+            else:
+                parsed['welcome_note'] = value
+
         if 'utility_model' in data:
             value = data['utility_model']
             if value is None or (isinstance(value, str) and not value.strip()):
@@ -627,6 +649,10 @@ class DashboardServer:
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
             'respond_to_everyone': state.set_respond_to_everyone,
             'stream_replies': state.set_stream_replies,
+            'max_unprompted_posts_per_hour': state.set_max_unprompted_posts_per_hour,
+            'welcome_enabled': state.set_welcome_enabled,
+            'welcome_channel_id': state.set_welcome_channel_id,
+            'welcome_note': state.set_welcome_note,
             'utility_model': state.set_utility_model,
             'daily_user_cost_budget': state.set_daily_user_cost_budget,
             'daily_user_image_limit': state.set_daily_user_image_limit,

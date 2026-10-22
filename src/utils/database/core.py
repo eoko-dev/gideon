@@ -20,6 +20,7 @@ from .backup_manager import BackupManager
 from .memory_manager import MemoryManager
 from .user_memory_manager import UserMemoryManager
 from .usage_manager import UsageManager
+from .event_manager import EventManager
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class DatabaseManager:
             self.memory = MemoryManager(self._conn)
             self.user_memory = UserMemoryManager(self._conn)
             self.usage = UsageManager(self._conn)
+            self.events = EventManager(self._conn)
 
             # Legacy private aliases (older call sites reference these)
             self._config = self.config
@@ -374,11 +376,11 @@ class DatabaseManager:
     # --- Reminder Methods (delegate to ReminderManager) ---
 
     def add_reminder(self, user_id: str, channel_id: str, message: str,
-                     due_timestamp: datetime) -> int:
-        """Adds a new reminder to the database."""
+                     due_timestamp: datetime, **options) -> int:
+        """Adds a new reminder to the database (options: recurrence, deliver_dm, timezone)."""
         # Ensure parent channel exists
         self._ensure_channel_exists(channel_id)
-        return self._reminders.add_reminder(user_id, channel_id, message, due_timestamp)
+        return self._reminders.add_reminder(user_id, channel_id, message, due_timestamp, **options)
 
     def get_due_reminders(self, current_time: datetime) -> List[Dict[str, Any]]:
         """Gets reminders that are due."""

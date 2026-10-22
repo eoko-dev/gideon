@@ -216,6 +216,33 @@ class SchemaManager:
             cost REAL NOT NULL DEFAULT 0,
             units INTEGER NOT NULL DEFAULT 0
         );
+        """,
+        # Events Gideon scheduled, with an RSVP card message
+        """
+        CREATE TABLE IF NOT EXISTS EVENTS (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT,
+            channel_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            start_time DATETIME NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 60,
+            discord_event_id TEXT,
+            card_message_id TEXT,
+            created_by TEXT,
+            created_at DATETIME NOT NULL
+        );
+        """,
+        # One RSVP per person per event; reminder_id is their "starting soon" reminder
+        """
+        CREATE TABLE IF NOT EXISTS EVENT_RSVPS (
+            event_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reminder_id INTEGER,
+            updated_at DATETIME NOT NULL,
+            PRIMARY KEY (event_id, user_id)
+        );
         """
     ]
 
@@ -304,10 +331,17 @@ class SchemaManager:
         # NULL = inherit the global respond_to_everyone setting
         SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "respond_to_everyone", "INTEGER")
 
+    @staticmethod
+    def _migration_4_reminder_options(cursor):
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "recurrence", "TEXT")
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "deliver_dm", "INTEGER DEFAULT 0")
+        SchemaManager._add_column_if_not_exists(cursor, "REMINDERS", "timezone", "TEXT")
+
     MIGRATIONS = (
         (1, "_migration_1_baseline"),
         (2, "_migration_2_thread_creator"),
         (3, "_migration_3_respond_to_everyone"),
+        (4, "_migration_4_reminder_options"),
     )
 
     @staticmethod

@@ -17,8 +17,7 @@ from dotenv import load_dotenv
 from .config import (
     DISCORD_TOKEN, OPENROUTER_API_KEY, SYSTEM_PROMPT, DEFAULT_MODEL,
     DATA_DIRECTORY, OPENAI_API_KEY, AI_HORDE_API_KEY, DASHBOARD_ENABLED,
-    ENCRYPTION_MASTER_KEY,
-)
+    ENCRYPTION_MASTER_KEY, MEMBERS_INTENT)
 from .utils.state_manager import BotStateManager
 from .utils.webhook_sender import WebhookSender
 from .utils.conversation_service import ConversationService
@@ -39,6 +38,8 @@ load_dotenv()
 # Create intents
 intents = discord.Intents.default()
 intents.message_content = True
+# Privileged; only requested when enabled in .env (and the Developer Portal)
+intents.members = MEMBERS_INTENT
 
 bot = commands.Bot(
     command_prefix="unused!",
@@ -93,6 +94,7 @@ COGS = [
     "src.cogs.dashboard_commands",      # Web admin dashboard
     "src.cogs.persona_commands",        # Per-channel personas with webhooks
     "src.cogs.context_menu_commands",   # /catchup + message context menus
+    "src.cogs.community_commands",      # Event RSVPs + welcomes
 ]
 
 # These cogs provide slash commands that duplicate dashboard functionality.

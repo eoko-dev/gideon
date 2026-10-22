@@ -444,6 +444,42 @@
                     </div>
 
                     <div class="card">
+                        <div class="card-header"><h2 class="card-title">Community</h2></div>
+                        <div class="card-body">
+                            <form id="community-form" novalidate>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-welcome-enabled">Welcome new members</label>
+                                        <select id="setting-welcome-enabled">
+                                            <option value="false">Off</option>
+                                            <option value="true">On</option>
+                                        </select>
+                                        <small class="field-hint" id="setting-welcome-hint">Needs MEMBERS_INTENT=TRUE in .env and the Server Members intent in the Discord Developer Portal.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-welcome-channel">Welcome channel ID</label>
+                                        <input type="text" id="setting-welcome-channel" inputmode="numeric" placeholder="Server's system channel" autocomplete="off">
+                                        <small class="field-hint">Leave empty to use the server's system messages channel.</small>
+                                    </div>
+                                    <div class="field">
+                                        <label for="setting-unprompted-limit">Unprompted posts per channel per hour</label>
+                                        <input type="number" id="setting-unprompted-limit" min="0" max="60" value="6">
+                                        <small class="field-hint">Reminders past this are combined into one message; extra welcomes are skipped. 0 = no limit.</small>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="setting-welcome-note">What newcomers should know</label>
+                                    <textarea id="setting-welcome-note" rows="3" maxlength="1000" placeholder="e.g. Read #rules first; game nights are Fridays."></textarea>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save community settings</button>
+                                    <span id="community-save-status" class="save-status" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
                         <div class="card-header"><h2 class="card-title">Cost controls</h2></div>
                         <div class="card-body">
                             <form id="cost-controls-form" novalidate>

@@ -63,6 +63,7 @@ Environment-based configuration loading:
 - `INTENT_DETECTION_MODEL` - (Deprecated) No longer used by tool-calling system
 - `INTENT_CONFIDENCE_THRESHOLD` - (Deprecated) No longer used by tool-calling system
 - `ENCRYPTION_MASTER_KEY` - Master key for Fernet encryption of API keys stored in DB
+- `MEMBERS_INTENT` - Request the privileged Server Members intent (needed for welcomes; must also be enabled in the Developer Portal)
 - `DASHBOARD_ENABLED` - Enable/disable web admin dashboard
 - `DASHBOARD_PORT` - Dashboard server port (default: 8080)
 - `DASHBOARD_SECRET` - Authentication secret for dashboard access
@@ -108,6 +109,12 @@ Environment-based configuration loading:
 - `utility_model` (string, default unset) — `provider/model` for background work (memory summaries, people notes, reminder time parsing); unset means the channel's own model
 - `daily_user_cost_budget` (float USD, default 0 = unlimited) — Per-user daily LLM spend cap, resets at local midnight
 - `daily_user_image_limit` (int, default 25) / `daily_user_video_limit` (int, default 3) — Per-user daily generation caps (0 = unlimited)
+
+**Behaviour Config Keys** (`GLOBAL_CONFIG` table):
+- `respond_to_everyone` (bool, default True) — @everyone/@here pings Gideon (per-channel override)
+- `stream_replies` (bool, default True) — Show replies as they're generated
+- `max_unprompted_posts_per_hour` (int, default 6) — Budget for reminders/welcomes per channel or server
+- `welcome_enabled` (bool, default False), `welcome_channel_id` (string, default the system channel), `welcome_note` (string) — Welcoming new members
 
 #### 4. Provider Management (`src/utils/model_manager.py`)
 `ProviderManager` lists and caches each provider's models and validates model IDs (`parse_model_id`, `get_models`). It does not route requests or fall back between providers — `ConversationService.resolve()` picks the client for a conversation.
@@ -224,8 +231,16 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - Persists results as `[video:url]` markers in message history for dashboard playback
 
 10. **`reminder_commands.py`** - Scheduled notifications
-   - `/remind`, `/listreminders`, `/cancelreminder`
-   - Background task checks for due reminders every 60s
+   - `/remind message when [dm]`, `/listreminders`, `/cancelreminder`, `/me timezone`
+   - Times are read in the user's timezone (`USERS.preferences_json.timezone`, set with `/me timezone`) by `src/utils/time_parse.py` (dateparser with some normalization; the LLM parser is the fallback for users on server time). "every weekday at 9am", "every mon and thu at 6pm", "every day/week/month" become RRULE strings in `REMINDERS.recurrence`
+   - `plan_reminder()` / `resolve_when()` are the shared entry points (tool, context menu and events use them)
+   - Background task checks for due reminders every 60s (`src/utils/reminder_service.py`): phrased in the channel persona's voice on the utility model, sent with Snooze (10 min / 1 h / tomorrow) and Done buttons (custom ids `gideon-rem:<action>:<id>[:<minutes>]`, handled in `on_interaction` so they survive restarts; only the owner can press them), by DM when `deliver_dm` (falls back to the channel), and recorded in history. Repeating reminders move to their next occurrence in the owner's timezone; snoozing a repeating one makes a one-off copy
+   - Several reminders due in one channel at once — or past the channel's hourly budget for unprompted posts — go out as one combined message
+
+16. **`community_commands.py`** - Event RSVPs and welcomes
+   - `schedule_event` posts an RSVP card (Going / Maybe / Can't, `gideon-rsvp:<status>:<event_id>`) and creates the native Discord event when the author may; Going sets a reminder 30 min before, changing the answer removes it (`src/utils/events_service.py`, tables `EVENTS`, `EVENT_RSVPS`). The bot needs Create Events for the native event; the card works without it. Native recurring events aren't supported (py-cord has no recurrence field)
+   - Welcomes (off by default): need `MEMBERS_INTENT=TRUE` (and the intent enabled in the Developer Portal) plus `welcome_enabled`; written in the welcome channel's persona voice with the admin's `welcome_note`, limited by the unprompted-post budget
+   - `src/utils/restraint.py` — `PostBudget`: a per-channel/server sliding hourly limit (`max_unprompted_posts_per_hour`, default 6, 0 = off) for posts nobody asked for in that moment
 
 11. **`dashboard_commands.py`** - Web admin dashboard management
     - `/dashboard status`, `/dashboard restart`

@@ -5,3 +5,5 @@ beautifulsoup4==4.15.*   # HTML parsing for URL summarization
 openai==3.*              # OpenAI API access (chat + DALL-E)
 cryptography==50.0.2       # Fernet encryption of API keys — keep current, gets CVEs
 tzdata==2026.*         # IANA tz database for zoneinfo (slim images may lack system tzdata)
+dateparser==1.2.*        # Natural-language reminder/event times in each user's timezone
+python-dateutil==2.9.*   # RRULE recurrence for repeating reminders

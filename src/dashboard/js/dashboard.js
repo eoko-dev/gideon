@@ -77,6 +77,10 @@
         tool_calling_max_iterations: 'tool-calling-max-iterations',
         respond_to_everyone: 'setting-respond-everyone',
         stream_replies: 'setting-stream-replies',
+        welcome_enabled: 'setting-welcome-enabled',
+        welcome_channel_id: 'setting-welcome-channel',
+        welcome_note: 'setting-welcome-note',
+        max_unprompted_posts_per_hour: 'setting-unprompted-limit',
         utility_model: 'setting-utility-model',
         daily_user_cost_budget: 'setting-cost-budget',
         daily_user_image_limit: 'setting-image-limit',
@@ -232,6 +236,7 @@
         formTrackers.memory = G.trackForm($('#memory-settings-form'), 'Memory system');
         formTrackers.tools = G.trackForm($('#tool-calling-form'), 'Tool calling');
         formTrackers.costs = G.trackForm($('#cost-controls-form'), 'Cost controls');
+        formTrackers.community = G.trackForm($('#community-form'), 'Community');
         formTrackers.imageProvider = G.trackForm($('#image-provider-form'), 'Active image provider');
         formTrackers.modalities = G.trackForm($('#modalities-form'), 'OpenRouter modalities');
         formTrackers.video = G.trackForm($('#video-config-form'), 'Video defaults');
@@ -892,6 +897,14 @@
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
         $('#setting-respond-everyone').value = data.respond_to_everyone === false ? 'false' : 'true';
         $('#setting-stream-replies').value = data.stream_replies === false ? 'false' : 'true';
+        $('#setting-welcome-enabled').value = data.welcome_enabled ? 'true' : 'false';
+        $('#setting-welcome-channel').value = data.welcome_channel_id || '';
+        $('#setting-welcome-note').value = data.welcome_note || '';
+        $('#setting-unprompted-limit').value = data.max_unprompted_posts_per_hour != null ? data.max_unprompted_posts_per_hour : 6;
+        var welcomeHint = $('#setting-welcome-hint');
+        if (welcomeHint && data.members_intent === false) {
+            welcomeHint.textContent = 'The bot is running without the Server Members intent, so welcomes won\'t fire. Set MEMBERS_INTENT=TRUE in .env and enable the intent in the Discord Developer Portal.';
+        }
 
         $('#setting-utility-model').value = data.utility_model || '';
         $('#setting-cost-budget').value = data.daily_user_cost_budget != null ? data.daily_user_cost_budget : 0;
@@ -902,7 +915,7 @@
         var searchEl = $('#setting-model-search');
         if (searchEl) searchEl.value = '';
         await loadModelsForProvider(provider, 'setting-model', settingsModel, null);
-        snapshot('settings', 'memory', 'tools', 'costs');
+        snapshot('settings', 'memory', 'tools', 'costs', 'community');
     }
 
     function updateToolCallingLabel() {
@@ -1016,6 +1029,33 @@
             snapshot('tools');
         } catch (err) {
             handleFormError(form, 'tool-calling-save-status', err, SETTINGS_FIELD_MAP);
+        }
+        setBusy(btn, false);
+    }
+
+    async function saveCommunitySettings(e) {
+        e.preventDefault();
+        var form = e.currentTarget;
+        G.clearFieldErrors(form);
+        var limit = readInt('setting-unprompted-limit');
+        if (limit === null) {
+            showSaveStatus('community-save-status', 'Fix the highlighted fields', true);
+            return;
+        }
+        var btn = e.submitter;
+        setBusy(btn, true);
+        try {
+            await api('PUT', '/api/settings', {
+                welcome_enabled: $('#setting-welcome-enabled').value === 'true',
+                welcome_channel_id: $('#setting-welcome-channel').value.trim() || null,
+                welcome_note: $('#setting-welcome-note').value.trim() || null,
+                max_unprompted_posts_per_hour: limit
+            });
+            markOwnWrite();
+            showSaveStatus('community-save-status', 'Community settings saved', false);
+            snapshot('community');
+        } catch (err) {
+            handleFormError(form, 'community-save-status', err, SETTINGS_FIELD_MAP);
         }
         setBusy(btn, false);
     }
@@ -3571,6 +3611,7 @@
         bindEvent('#memory-settings-form', 'submit', saveMemorySettings);
         bindEvent('#tool-calling-form', 'submit', saveToolCallingSettings);
         bindEvent('#cost-controls-form', 'submit', saveCostControls);
+        bindEvent('#community-form', 'submit', saveCommunitySettings);
         bindEvent('#usage-days', 'change', loadUsage);
         bindEvent('#tool-calling-enabled', 'change', updateToolCallingLabel);
         bindEvent('#setting-provider', 'change', onProviderChange);

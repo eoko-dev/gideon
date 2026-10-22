@@ -129,7 +129,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any],
 
 @tool({
     "name": "set_reminder",
-    "description": "Set a reminder for the user. Use when the user asks to be reminded about something at a future time.",
+    "description": ("Set a reminder for the user. Use when the user asks to be reminded about something at a "
+                    "future time, once or repeating."),
     "parameters": {
         "type": "object",
         "properties": {
@@ -139,7 +140,13 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any],
             },
             "time_expression": {
                 "type": "string",
-                "description": "When to send the reminder, as a natural language time expression (e.g., 'in 2 hours', 'tomorrow at 3pm', 'at 5pm')"
+                "description": ("When, in natural language, exactly as the user said it: 'in 2 hours', "
+                                "'tomorrow at 3pm', 'Friday 6pm', or repeating: 'every weekday at 9am', "
+                                "'every monday and thursday at 7pm', 'every day at 8pm'")
+            },
+            "deliver_by_dm": {
+                "type": "boolean",
+                "description": "True if the user wants the reminder sent to them privately"
             }
         },
         "required": ["reminder_message", "time_expression"]
@@ -153,7 +160,8 @@ async def _set_reminder(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     reminder_message = args.get("reminder_message", "")
     time_expression = args.get("time_expression", "")
     error = await cog.handle_reminder_request(
-        ctx["message"], ctx["channel_id"], reminder_message, time_expression
+        ctx["message"], ctx["channel_id"], reminder_message, time_expression,
+        deliver_by_dm=bool(args.get("deliver_by_dm")),
     )
     if error:
         return f"Error: the reminder was NOT set. {error}"

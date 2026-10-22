@@ -51,6 +51,10 @@ CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
 CONFIG_KEY_RESPOND_TO_EVERYONE = "respond_to_everyone"
 CONFIG_KEY_STREAM_REPLIES = "stream_replies"
+CONFIG_KEY_MAX_UNPROMPTED_POSTS = "max_unprompted_posts_per_hour"
+CONFIG_KEY_WELCOME_ENABLED = "welcome_enabled"
+CONFIG_KEY_WELCOME_CHANNEL = "welcome_channel_id"
+CONFIG_KEY_WELCOME_NOTE = "welcome_note"
 CONFIG_KEY_UTILITY_MODEL = "utility_model"
 CONFIG_KEY_DAILY_COST_BUDGET = "daily_user_cost_budget"
 CONFIG_KEY_DAILY_IMAGE_LIMIT = "daily_user_image_limit"
@@ -109,6 +113,13 @@ class BotStateManager:
 
         # Whether @everyone/@here counts as mentioning Gideon (per-channel override in CHANNEL_CONFIG)
         self.respond_to_everyone = await self._load_or_set_config(CONFIG_KEY_RESPOND_TO_EVERYONE, True, 'bool')
+
+        # Unprompted posts (reminders, RSVP nudges, welcomes) per channel per hour; 0 = no limit
+        self.max_unprompted_posts_per_hour = await self._load_or_set_config(CONFIG_KEY_MAX_UNPROMPTED_POSTS, 6, 'int')
+        # Welcoming new members (needs MEMBERS_INTENT=TRUE)
+        self.welcome_enabled = await self._load_or_set_config(CONFIG_KEY_WELCOME_ENABLED, False, 'bool')
+        self.welcome_channel_id = await self._load_or_set_config(CONFIG_KEY_WELCOME_CHANNEL, None, 'string')
+        self.welcome_note = await self._load_or_set_config(CONFIG_KEY_WELCOME_NOTE, None, 'string')
 
         # Show replies as they're generated (paced message edits)
         self.stream_replies = await self._load_or_set_config(CONFIG_KEY_STREAM_REPLIES, True, 'bool')
@@ -324,6 +335,34 @@ class BotStateManager:
         if val is not None:
             return bool(int(val))
         return self.user_memory_enabled
+
+    def get_max_unprompted_posts_per_hour(self) -> int:
+        return int(self.max_unprompted_posts_per_hour or 0)
+
+    async def set_max_unprompted_posts_per_hour(self, value: int):
+        self.max_unprompted_posts_per_hour = int(value)
+        await self._save_config(CONFIG_KEY_MAX_UNPROMPTED_POSTS, self.max_unprompted_posts_per_hour, 'int')
+
+    def get_welcome_enabled(self) -> bool:
+        return bool(self.welcome_enabled)
+
+    async def set_welcome_enabled(self, value: bool):
+        self.welcome_enabled = bool(value)
+        await self._save_config(CONFIG_KEY_WELCOME_ENABLED, self.welcome_enabled, 'bool')
+
+    def get_welcome_channel_id(self) -> Optional[str]:
+        return self.welcome_channel_id or None
+
+    async def set_welcome_channel_id(self, value: Optional[str]):
+        self.welcome_channel_id = (str(value).strip() if value else None) or None
+        await self._save_config(CONFIG_KEY_WELCOME_CHANNEL, self.welcome_channel_id, 'string')
+
+    def get_welcome_note(self) -> Optional[str]:
+        return self.welcome_note or None
+
+    async def set_welcome_note(self, value: Optional[str]):
+        self.welcome_note = (value or "").strip() or None
+        await self._save_config(CONFIG_KEY_WELCOME_NOTE, self.welcome_note, 'string')
 
     def get_stream_replies(self) -> bool:
         return bool(self.stream_replies)
@@ -1386,14 +1425,50 @@ class BotStateManager:
     # --- Reminder Methods (Delegation) ---
 
     def add_reminder(self, user_id: str, channel_id: str, message: str,
-                     due_timestamp: datetime) -> int:
-        """Adds a reminder to the database."""
+                     due_timestamp: datetime, recurrence: Optional[str] = None,
+                     deliver_dm: bool = False, timezone: Optional[str] = None) -> int:
+        """Adds a reminder (due_timestamp is naive server-local; recurrence is an RRULE)."""
         return self.db_manager.add_reminder(
             user_id=str(user_id),
             channel_id=str(channel_id),
             message=message,
-            due_timestamp=due_timestamp
+            due_timestamp=due_timestamp,
+            recurrence=recurrence,
+            deliver_dm=deliver_dm,
+            timezone=timezone,
         )
+
+    def get_reminder(self, reminder_id: int) -> Optional[Dict[str, Any]]:
+        return self.db_manager.reminders.get_reminder(int(reminder_id))
+
+    def reschedule_reminder(self, reminder_id: int, due_timestamp: datetime) -> bool:
+        return self.db_manager.reminders.reschedule(int(reminder_id), due_timestamp)
+
+    # --- Per-user timezone (USERS.preferences_json) ---
+
+    def get_user_timezone_name(self, user_id: str) -> Optional[str]:
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        return prefs.get('timezone') or None
+
+    def get_user_timezone(self, user_id: str):
+        """The user's ZoneInfo, or the server timezone if they haven't set one."""
+        from .time_parse import resolve_timezone
+        from .timeutil import local_tz
+        return resolve_timezone(self.get_user_timezone_name(user_id)) or local_tz()
+
+    def set_user_timezone(self, user_id: str, name: Optional[str]) -> Optional[str]:
+        """Stores a timezone (canonical IANA name) or clears it with None. Raises ValueError if unknown."""
+        from .time_parse import resolve_timezone
+        prefs = self.db_manager.get_user_preferences(str(user_id)) or {}
+        if name:
+            zone = resolve_timezone(name)
+            if zone is None:
+                raise ValueError(f"Unknown timezone '{name}'. Use a name like America/Chicago or Europe/London.")
+            prefs['timezone'] = str(zone)
+        else:
+            prefs.pop('timezone', None)
+        self.db_manager.set_user_preferences(str(user_id), prefs)
+        return prefs.get('timezone')
 
     def get_due_reminders(self, current_time: datetime) -> List[Dict[str, Any]]:
         """Gets reminders that are due."""

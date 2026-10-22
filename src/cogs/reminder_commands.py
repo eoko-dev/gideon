@@ -3,14 +3,60 @@ import discord
 import logging
 from discord.ext import commands
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Dict, Optional
 import json
 import os
 from ..utils.memory_service import llm_clients
 from ..utils.usage import usage_scope
+from ..utils import time_parse
 from ..utils.timeutil import local_tz, now_local, to_epoch
 
 logger = logging.getLogger('reminder_commands')
+
+# custom_id prefix for reminder buttons: gideon-rem:<action>:<reminder_id>[:<minutes>]
+BUTTON_PREFIX = "gideon-rem:"
+
+COMMON_TIMEZONES = [
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix",
+    "America/Anchorage", "Pacific/Honolulu", "America/Toronto", "America/Vancouver", "America/Sao_Paulo",
+    "America/Mexico_City", "Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin",
+    "Europe/Madrid", "Europe/Stockholm", "Europe/Athens", "Africa/Johannesburg", "Asia/Dubai",
+    "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland",
+]
+
+
+def _as_datetime(value) -> datetime:
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+    return value
+
+
+def format_confirmation(reminder_id: int, message: str, due: datetime, recurrence: Optional[str],
+                        dm: bool) -> str:
+    """The "Reminder set!" text shared by /remind, the tool and the context menu."""
+    stamp = to_epoch(due)
+    lines = ["✅ Reminder set!", f"**Message:** {message}",
+             f"**When:** <t:{stamp}:F> (<t:{stamp}:R>)"]
+    if recurrence:
+        lines.append(f"**Repeats:** {time_parse.describe_rule(recurrence)}")
+    if dm:
+        lines.append("**Delivery:** by DM")
+    lines.append(f"**Reminder ID:** {reminder_id}")
+    return "\n".join(lines)
+
+
+def reminder_buttons(reminder_id: int) -> discord.ui.View:
+    """Snooze/Done buttons for a delivered reminder (handled in on_interaction)."""
+    view = discord.ui.View(timeout=None)
+    for label, minutes in (("10 min", 10), ("1 hour", 60), ("Tomorrow", 24 * 60)):
+        view.add_item(discord.ui.Button(label=f"Snooze {label}", style=discord.ButtonStyle.secondary,
+                                        emoji="😴", custom_id=f"{BUTTON_PREFIX}snooze:{reminder_id}:{minutes}"))
+    view.add_item(discord.ui.Button(label="Done", style=discord.ButtonStyle.success, emoji="✅",
+                                    custom_id=f"{BUTTON_PREFIX}done:{reminder_id}"))
+    return view
 
 class ReminderCommands(commands.Cog):
     """Commands for reminder functionality."""
@@ -25,8 +71,40 @@ class ReminderCommands(commands.Cog):
         }
 
     async def resolve_when(self, when: str, channel_id: str, user=None) -> Optional[datetime]:
-        """Parses a natural-language time into a future server-local datetime (or None)."""
-        return await self.parse_time_with_ai(when, channel_id)
+        """Parses a one-off natural-language time into a future server-local datetime (or None)."""
+        plan = await self.plan_reminder(when, channel_id, user, allow_repeat=False)
+        return plan["due"] if plan else None
+
+    async def plan_reminder(self, when: str, channel_id: str, user=None,
+                            allow_repeat: bool = True) -> Optional[Dict[str, Any]]:
+        """Works out when a reminder fires.
+
+        Returns {"due": naive server-local datetime, "recurrence": RRULE or None,
+        "timezone": IANA name or None} or None if the time can't be understood
+        or isn't in the future. Times are read in the user's own timezone
+        (/me timezone); unusual phrasings fall back to the LLM parser.
+        """
+        tz_name = self.state.get_user_timezone_name(str(user.id)) if user is not None else None
+        tz = self.state.get_user_timezone(str(user.id)) if user is not None else local_tz()
+        recurrence, first = time_parse.parse_recurrence(when) if allow_repeat else (None, when)
+
+        candidate = time_parse.parse_when(first, tz)
+        if candidate is not None:
+            if recurrence:
+                candidate = time_parse.first_occurrence(recurrence, candidate)
+            return {"due": time_parse.to_server_naive(candidate), "recurrence": recurrence,
+                    "timezone": str(tz) if tz_name else None}
+
+        # The LLM parser works in server time and doesn't know the user's zone
+        if tz_name and str(tz) != str(local_tz()):
+            logger.info(f"[Reminder] Couldn't parse '{first}' locally for a user in {tz}; not guessing")
+            return None
+        due = await self.parse_time_with_ai(first, channel_id)
+        if due is None:
+            return None
+        if recurrence:
+            due = time_parse.to_server_naive(time_parse.first_occurrence(recurrence, due.replace(tzinfo=local_tz())))
+        return {"due": due, "recurrence": recurrence, "timezone": None}
 
     async def parse_time_with_ai(self, time_str: str, channel_id: str) -> Optional[datetime]:
         """
@@ -171,64 +249,50 @@ Return ONLY the JSON, no other text."""
 
     @discord.slash_command(
         name="remind",
-        description="Set a reminder"
+        description="Set a reminder (e.g. 'in 2 hours', 'Friday 6pm', 'every weekday at 9am')"
     )
     async def remind_slash(
         self,
         ctx,
         message: discord.Option(str, "What should I remind you about?", required=True),
-        when: discord.Option(str, "When? (e.g., 'in 2 hours', 'tomorrow at 3pm')", required=True)
+        when: discord.Option(str, "When? 'in 2 hours', 'tomorrow at 3pm', 'every monday at 9am'", required=True),
+        dm: discord.Option(bool, "Send it to you privately instead of in this channel", required=False,
+                           default=False),
     ):
         """Set a reminder using natural language time."""
-        await ctx.defer()
-
-        channel_id = str(ctx.channel.id)
+        await ctx.defer(ephemeral=bool(dm))
         user_id = str(ctx.author.id)
+        logger.info(f"[Reminder] User {user_id} setting reminder in channel {ctx.channel.id}: '{message}' at '{when}'")
 
-        # Parse the time using AI
-        logger.info(f"[Reminder] User {user_id} setting reminder in channel {channel_id}: '{message}' at '{when}'")
-
-        parsed_time = await self.parse_time_with_ai(when, channel_id)
-
-        if parsed_time is None:
+        plan = await self.plan_reminder(when, self._scope_id(ctx.channel), ctx.author)
+        if plan is None:
+            hint = "" if self.state.get_user_timezone_name(user_id) else \
+                "\n💡 Times use the server's timezone until you set yours with `/me timezone`."
             await ctx.followup.send(
-                f"❌ I couldn't understand the time '{when}'. "
-                f"Please try something like 'in 2 hours', 'tomorrow at 3pm', or 'next Monday at noon'."
-            )
+                f"❌ I couldn't understand '{when}' as a time in the future. Try 'in 2 hours', "
+                f"'tomorrow at 3pm' or 'every monday at 9am'.{hint}", ephemeral=True)
+            return
+        if plan["due"] > datetime.now() + timedelta(days=366):
+            await ctx.followup.send("❌ Reminders can be at most a year away.", ephemeral=True)
             return
 
-        # Check if time is too far in the future (optional: max 1 year)
-        max_future = datetime.now() + timedelta(days=365)
-        if parsed_time > max_future:
-            await ctx.followup.send(
-                "❌ Reminder time is too far in the future (max 1 year)."
-            )
-            return
-
-        # Save reminder to database
         try:
             reminder_id = self.state.add_reminder(
-                user_id=user_id,
-                channel_id=channel_id,
-                message=message,
-                due_timestamp=parsed_time
-            )
-
-            # Create Discord timestamp (shows in user's timezone)
-            discord_timestamp = to_epoch(parsed_time)
-
-            # Success message with Discord timestamp formatting
-            await ctx.followup.send(
-                f"✅ Reminder set!\n"
-                f"**Message:** {message}\n"
-                f"**When:** <t:{discord_timestamp}:F> (<t:{discord_timestamp}:R>)\n"
-                f"**Reminder ID:** {reminder_id}"
-            )
-            logger.info(f"User {user_id} set reminder {reminder_id} for {parsed_time}")
-
+                user_id=user_id, channel_id=str(ctx.channel.id), message=message,
+                due_timestamp=plan["due"], recurrence=plan["recurrence"], deliver_dm=bool(dm),
+                timezone=plan["timezone"])
         except Exception as e:
             logger.exception(f"Error setting reminder: {e}")
-            await ctx.followup.send(f"❌ Failed to save reminder: {str(e)}")
+            await ctx.followup.send("❌ The reminder couldn't be saved.", ephemeral=True)
+            return
+
+        await ctx.followup.send(format_confirmation(reminder_id, message, plan["due"], plan["recurrence"], dm),
+                                ephemeral=bool(dm))
+        logger.info(f"User {user_id} set reminder {reminder_id} for {plan['due']} ({plan['recurrence']})")
+
+    @staticmethod
+    def _scope_id(channel) -> str:
+        return str(channel.parent_id) if isinstance(channel, discord.Thread) else str(channel.id)
 
     @discord.slash_command(
         name="listreminders",
@@ -237,55 +301,103 @@ Return ONLY the JSON, no other text."""
     async def listreminders_slash(self, ctx):
         """Show all pending reminders for the user."""
         await ctx.defer(ephemeral=True)
+        reminders = self.state.get_user_reminders(str(ctx.author.id), include_sent=False)
+        if not reminders:
+            await ctx.followup.send("You have no pending reminders.", ephemeral=True)
+            return
 
+        embed = discord.Embed(title=f"📝 Your Reminders ({len(reminders)})", color=discord.Color.blue())
+        for reminder in reminders[:25]:  # Discord embed field limit
+            stamp = to_epoch(_as_datetime(reminder['due_timestamp']))
+            text = reminder['message']
+            display_message = text if len(text) <= 50 else text[:47] + "..."
+            extras = [time_parse.describe_rule(reminder.get('recurrence'))]
+            if reminder.get('deliver_dm'):
+                extras.append("by DM")
+            extra = " · ".join(e for e in extras if e)
+            embed.add_field(
+                name=f"ID {reminder['reminder_id']}: {display_message}",
+                value=f"Due: <t:{stamp}:F> (<t:{stamp}:R>)" + (f"\n🔁 {extra}" if extra else ""),
+                inline=False)
+        if len(reminders) > 25:
+            embed.set_footer(text=f"Showing first 25 of {len(reminders)} reminders")
+        await ctx.followup.send(embed=embed, ephemeral=True)
+
+    # ─── /me ────────────────────────────────────────────────────────────────
+
+    me = discord.SlashCommandGroup("me", "Your personal Gideon settings")
+
+    async def timezone_autocomplete(self, ctx):
+        from zoneinfo import available_timezones
+        typed = (ctx.value or "").lower().replace(" ", "_")
+        zones = sorted(z for z in available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/")))
+        matches = [z for z in zones if typed in z.lower()] if typed else COMMON_TIMEZONES
+        return matches[:25]
+
+    @me.command(name="timezone", description="Set your timezone so reminder times mean your local time")
+    async def me_timezone(
+        self, ctx,
+        timezone: discord.Option(str, "e.g. America/Chicago, Europe/London (leave empty to see yours)",
+                                 required=False, default=None, autocomplete=timezone_autocomplete),
+    ):
         user_id = str(ctx.author.id)
-
+        if not timezone:
+            current = self.state.get_user_timezone_name(user_id)
+            await ctx.respond(f"Your timezone is **{current}**." if current else
+                              f"You haven't set a timezone; I use the server's (**{local_tz()}**).", ephemeral=True)
+            return
         try:
-            reminders = self.state.get_user_reminders(user_id, include_sent=False)
+            name = self.state.set_user_timezone(user_id, timezone)
+        except ValueError as e:
+            await ctx.respond(f"❌ {e}", ephemeral=True)
+            return
+        local_now = datetime.now(time_parse.resolve_timezone(name))
+        await ctx.respond(f"✅ Timezone set to **{name}** (it's {local_now.strftime('%I:%M %p').lstrip('0')} "
+                          f"there now). Existing reminders keep their times.", ephemeral=True)
 
-            if not reminders:
-                await ctx.followup.send("You have no pending reminders.", ephemeral=True)
-                return
+    # ─── Reminder buttons (snooze / done) ───────────────────────────────────
 
-            # Create embed
-            embed = discord.Embed(
-                title=f"📝 Your Reminders ({len(reminders)})",
-                color=discord.Color.blue(),
-                description="Here are your pending reminders:"
-            )
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """Handles the Snooze/Done buttons on delivered reminders (works across restarts)."""
+        if interaction.type != discord.InteractionType.component:
+            return
+        custom_id = (interaction.data or {}).get("custom_id", "")
+        if not custom_id.startswith(BUTTON_PREFIX):
+            return
+        try:
+            _, action, reminder_id, *rest = custom_id.split(":")
+            reminder = self.state.get_reminder(int(reminder_id))
+        except (ValueError, TypeError):
+            return
+        if reminder is None:
+            await interaction.response.send_message("That reminder no longer exists.", ephemeral=True)
+            return
+        if str(interaction.user.id) != str(reminder["user_id"]):
+            await interaction.response.send_message("Only the person this reminder is for can do that.",
+                                                    ephemeral=True)
+            return
 
-            for reminder in reminders[:25]:  # Discord embed field limit
-                reminder_id = reminder['reminder_id']
-                message = reminder['message']
-                due_timestamp = reminder['due_timestamp']
-
-                # Handle datetime conversion if needed
-                if isinstance(due_timestamp, str):
-                    try:
-                        due_timestamp = datetime.fromisoformat(due_timestamp)
-                    except ValueError:
-                        due_timestamp = datetime.strptime(due_timestamp, '%Y-%m-%d %H:%M:%S')
-
-                # Localize naive datetime to local timezone before converting to timestamp
-                discord_timestamp = to_epoch(due_timestamp)
-
-                # Truncate long messages
-                display_message = message if len(message) <= 50 else message[:47] + "..."
-
-                embed.add_field(
-                    name=f"ID {reminder_id}: {display_message}",
-                    value=f"Due: <t:{discord_timestamp}:F> (<t:{discord_timestamp}:R>)",
-                    inline=False
-                )
-
-            if len(reminders) > 25:
-                embed.set_footer(text=f"Showing first 25 of {len(reminders)} reminders")
-
-            await ctx.followup.send(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            logger.exception(f"Error listing reminders: {e}")
-            await ctx.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+        if action == "done":
+            await interaction.response.edit_message(view=None)
+            return
+        if action == "snooze":
+            minutes = int(rest[0]) if rest else 10
+            due = datetime.now() + timedelta(minutes=minutes)
+            due = due.replace(second=0, microsecond=0)
+            if reminder.get("recurrence"):
+                # Keep the repeating schedule; snooze this occurrence as a one-off copy
+                new_id = self.state.add_reminder(
+                    user_id=reminder["user_id"], channel_id=reminder["channel_id"], message=reminder["message"],
+                    due_timestamp=due, deliver_dm=bool(reminder.get("deliver_dm")),
+                    timezone=reminder.get("timezone"))
+            else:
+                self.state.reschedule_reminder(reminder["reminder_id"], due)
+                new_id = reminder["reminder_id"]
+            stamp = to_epoch(due)
+            await interaction.response.edit_message(view=None)
+            await interaction.followup.send(f"😴 Snoozed — I'll remind you again <t:{stamp}:R> (#{new_id}).",
+                                            ephemeral=True)
 
     @discord.slash_command(
         name="cancelreminder",
