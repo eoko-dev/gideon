@@ -4,8 +4,8 @@
 
 <img src="assets/images/gideon-logo.jpeg" alt="Gideon Logo" width="400"/>
 
-<a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.8+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.8+"></a>
-<a href="https://github.com/Pycord-Development/pycord"><img src="https://img.shields.io/badge/py--cord-2.4+-5865F2.svg?style=for-the-badge&logo=discord&logoColor=white" alt="Py-Cord 2.4+"></a>
+<a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+"></a>
+<a href="https://github.com/Pycord-Development/pycord"><img src="https://img.shields.io/badge/py--cord-2.8-5865F2.svg?style=for-the-badge&logo=discord&logoColor=white" alt="Py-Cord 2.8"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge" alt="License MIT"></a>
 
 *Your server's intelligent companion powered by cutting-edge AI models*
@@ -21,7 +21,7 @@
 
 ## 🌟 Overview
 
-Gideon transforms your Discord server into an AI-powered hub, connecting members to state-of-the-art language and image models. With Gideon, users can have intelligent conversations, generate creative images, analyze visual content, manage URLs, play AI-powered trivia games, and organize discussions through an intuitive thread system.
+Gideon is an AI butler for your Discord server. Talk to it naturally — @mention it, reply to it, or use slash commands and message menus — and it answers in context, remembers each channel and the people in it, catches you up on what you missed, keeps your reminders and events, and generates images and video. It streams its answers as it writes, stays inside the channel you're talking in, and keeps costs in check with per-user limits and a cheap background model.
 
 ## ✨ Features
 
@@ -30,36 +30,43 @@ Gideon transforms your Discord server into an AI-powered hub, connecting members
 * **Multiple AI Models** - Access OpenAI, Anthropic Claude, Google Gemini, and more through OpenRouter
 * **Persistent Channel Memory** - Long-term, channel-specific memory that grows over time. When a channel goes quiet for a configurable period (default 24 hours), Gideon automatically summarizes the conversation and stores it as a memory entry. Future conversations in that channel are informed by all past summaries — injected into the AI's context on every message — so the bot never loses track of recurring topics, decisions, or channel history. Memories are channel-isolated: `#general` never bleeds into `#dev`. Configurable via the dashboard or per-channel overrides.
 * **Per-User Memory, Per Channel** - Gideon also keeps short notes about each person (preferences, projects, how they like answers), separately in every channel: what it learns about you in `#dev` is never used in `#general`. Threads share their parent channel's notes. Say "@Gideon remember that I prefer metric" to add one; see yours with `/memory me`, delete them with `/memory forget`, or opt out everywhere with `/memory optout`.
-* **Native Tool Calling** - Simply @mention Gideon with natural language to automatically execute commands without needing to remember slash command syntax. The primary LLM model natively decides whether to call a tool or respond conversationally — no separate intent classification step needed:
-  + **Reminders**: "@Gideon remind me to check the server logs tomorrow at 3pm"
+* **Natural Conversation Everywhere** - @mention Gideon in any channel, user-created thread or forum post, or simply reply to one of its messages. Answers stream in as they're written and arrive as Discord replies, so it's always clear who Gideon is answering. Gideon knows the date and time, the server and the channel, and sees what a message was replying to, forwarded messages, attachments and embeds.
+* **Native Tool Calling** - Ask in plain language and Gideon decides whether to use a tool (on by default):
+  + **Reminders**: "@Gideon remind me to check the server logs tomorrow at 3pm" · "every weekday at 9am" · "DM me Friday at 6"
+  + **Events with RSVP**: "@Gideon schedule game night Friday 8pm" — posts a Going / Maybe / Can't card and reminds the people going
   + **Image Generation**: "@Gideon draw a sunset over mountains with vibrant colors"
-  + **Web Search**: "@Gideon what are the current best games on Xbox Game Pass"
-  + **Calculations**: "@Gideon what's 15% of 250?"
-  + **Translations**: "@Gideon translate 'hello world' to French"
-  + **Definitions**: "@Gideon define serendipity"
-  + **Polls**: "@Gideon create a poll: pizza vs burgers vs tacos"
-  + **Timezone Conversion**: "@Gideon what's 3pm EST in Tokyo?"
-  + **Unit Conversion**: "@Gideon convert 5 miles to kilometers"
-  + **Dice Rolls**: "@Gideon roll 3d6"
-  + **Events**: "@Gideon schedule a team meeting next Friday at 2pm"
-  + **Multi-Tool**: "@Gideon calculate 15% of 250 and translate the result to French"
-  + **Conversation**: Any other @mention automatically engages in natural conversation
+  + **Web Search & Pages**: "@Gideon what's new with the Artemis mission?" · "summarize https://…"
+  + **The Channel Itself**: "@Gideon what did Sam say about the raid?" · "what's pinned here?" · "what did we decide last month?" · "who are the mods?"
+  + **Your Reminders**: "@Gideon what are my reminders?" · "cancel reminder 12"
+  + **Polls, Threads & More**: "make a poll: pizza vs tacos" · "start a thread for this" · "roll 3d6" · "what's 15% of 250?" · "what's 3pm EST in Tokyo?"
+  + **Translations, definitions and conversions** are answered directly
+  + **Conversation**: Any other @mention is a normal chat
+* **Safe by Design** - Lookups never read outside the channel you're in; text from web pages or other people's messages is treated as data, and once Gideon has read it, actions like reminders, polls and memory writes are paused for the rest of that reply. Gideon never pings @everyone, @here or roles.
 * **Web Search** - Search the web for current information through conversational AI responses or natural language (@mention)
 * **Image Generation** - Create stunning visuals using the unified `/dream` command or natural language @mentions. Supports multiple backend providers (AI Horde, Cloudflare Worker, OpenAI DALL-E, ComfyUI, OpenRouter). Admins can configure the active provider and its default settings.
 * **Video Generation** - Generate AI videos with the `/video` command or directly from the dashboard, powered by OpenRouter's asynchronous video API. Supports multiple models (Veo 3.1, Sora 2 Pro, Seedance 2.0/1.5, Wan 2.7/2.6, Kling O1, etc.) with configurable duration, aspect ratio, resolution (480p, 720p, 1080p, 2K, or 4K), audio, seed, and optional reference image (image-to-video).
+
+### 🔔 Attentive Assistant
+
+* **Catch Up** - `/catchup` or right-click a message → *Apps* → **Summarize from here** for a private summary of what you missed, with links back to the original messages
+* **Message Menus** - Right-click any message → *Apps*: **Ask Gideon** (answered in the channel), **Remind me about this**, **Translate** (into your Discord language, privately) and **Remember this about me**
+* **Reminders in Your Timezone** - Set your timezone with `/me timezone` and "tomorrow at 9am" means 9am where you are. Repeat reminders ("every mon and thu at 6pm"), get them by DM, and snooze or dismiss them with buttons
+* **Events with RSVP** - Scheduled events get a card with Going / Maybe / Can't buttons; everyone going is reminded 30 minutes before. When the organizer is allowed to, the event also appears in the server's Events list
+* **Welcomes** *(opt-in)* - Greet new members in your persona's voice and point them to the right channels
+* **Never Spammy** - Gideon limits how often it posts unprompted (default 6 per channel per hour); extra reminders are combined into one message
 
 ### 🎭 Per-Channel Personas
 
 Give Gideon a unique identity in every channel using Discord webhooks. Each persona can have its own display name, avatar, and system prompt — letting you tailor the bot's personality to different communities, topics, or server roles.
 
 * **Custom Personas** — Set a unique name, avatar URL, and system prompt per channel
-* **Built-in Templates** — Get started quickly with seeded templates: *Helpful Assistant*, *Tech Guru*, and *Creative Writer*
+* **Built-in Templates** — Get started quickly with seeded templates: *Helpful Assistant*, *Tech Guru*, *Creative Writer*, *Study Buddy* and *Concise Responder*
 * **Template Inheritance** — Channel personas can reference templates without being locked to them; template updates don't overwrite existing configurations
 * **Webhook-Powered** — Responses route through Discord webhooks so the persona appears as its own identity, not the bot account
 * **Automatic Fallback** — If webhook creation fails (e.g., missing permissions), Gideon falls back to the bot account gracefully
 * **Thread Support** — Personas inherit from parent channels in threads
 
-**Commands**: `/persona set`, `/persona template`, `/persona view`, `/persona list`, `/persona toggle`, `/persona remove`, `/persona preview`, `/persona templates`
+**Commands**: `/persona set`, `/persona template`, `/persona show`, `/persona list`, `/persona toggle`, `/persona remove`, `/persona preview`, `/persona templates`
 
 ### 🎮 Entertainment
 
@@ -85,7 +92,8 @@ Give Gideon a unique identity in every channel using Discord webhooks. Each pers
 * **API Key Management** - Add, edit, validate, and delete API keys for all providers via the dashboard, with Fernet-encrypted database storage and full audit logging
 * **Personas Tab** - Browse, create, edit, and apply channel personas and templates from the browser
 * **Backup & Restore** - Export and import your configuration (JSON) or full database (SQLite) directly from the dashboard
-* **Settings Management** - Edit global settings, channel overrides, session timeout, auto-summarize toggle, and tool calling from the browser
+* **Settings Management** - Edit global settings, channel overrides, session timeout, auto-summarize, tool calling, streaming, whether @everyone / @here pings Gideon (globally or per channel), and welcomes from the browser
+* **Usage & Cost Controls** - See cost, tokens and image/video counts by feature, model and person; set a cheap utility model for background work and per-user daily limits for chat spend, images and videos
 * **Thread & Channel Management** - View, edit, and delete threads and channel configurations
 * **System Diagnostics** - Run diagnostics, check provider status, and trigger data pruning
 * **Secure Authentication** - Token-based authentication with configurable secret key
@@ -106,6 +114,7 @@ Protect your bot's configuration and data with a full backup and restore system,
 * **Model Switching** - Change AI models on-the-fly with simple commands
 * **Channel Personalities** - Set different system prompts per channel, or go further with full per-channel personas
 * **Admin Controls** - Comprehensive configuration options for server admins
+* **Cost Controls** - A utility model for summaries, notes, catch-ups and reminder phrasing; per-user daily limits (admins exempt); prompt layout that lets providers cache the stable part of every request
 
 ## 🚀 Installation
 
@@ -119,7 +128,7 @@ There are two ways to install and run Gideon: using Docker (recommended for ease
 * Discord bot token with Message Content Intent enabled ([Discord Developer Portal](https://discord.com/developers/applications))
 * OpenRouter API key ([OpenRouter.ai](https://openrouter.ai/))
 * AI Horde API key (optional, for `/dream` command - [AI Horde](https://aihorde.net/register))
-* Cloudflare Worker URL & API Key (optional, requires self-setup — see [Cloudflare Worker Configuration](#cloudflare-worker-configuration-optional))
+* Cloudflare Worker URL & API Key (optional, requires self-setup — see [Cloudflare Worker Configuration](#image-generation-provider-configuration-optional))
 
 **For Docker Installation:**
 
@@ -128,7 +137,7 @@ There are two ways to install and run Gideon: using Docker (recommended for ease
 
 **For Python Installation:**
 
-* Python 3.8+
+* Python 3.10+ (the Docker image uses 3.12)
 
 ### Docker Installation (Recommended)
 
@@ -200,10 +209,11 @@ python3 -m src
 1. Create an application at [Discord Developer Portal](https://discord.com/developers/applications)
 2. Under "Bot" tab:
    * Enable "Message Content Intent"
+   * *(Optional, for welcomes)* Enable "Server Members Intent", then set `MEMBERS_INTENT=TRUE` in `.env` — only after enabling it here, or the bot can't connect
    * Copy your bot token for the `.env` file
 3. Generate invite URL in "OAuth2 > URL Generator":
    * Scopes: `bot`, `applications.commands`
-   * Permissions: Send Messages, Read Message History, Embed Links, Use Slash Commands, Manage Threads, **Manage Webhooks** (required for persona feature)
+   * Permissions: Send Messages, Send Messages in Threads, Read Message History, Embed Links, Attach Files, Add Reactions, Use Slash Commands, Create Public Threads, Manage Threads, Send Polls, **Manage Webhooks** (required for personas), **Create Events** (optional, so events also appear in the server's Events list)
 
 ### Tool Calling Configuration (Optional)
 
@@ -226,12 +236,22 @@ When you @mention Gideon, the bot sends your message to the primary LLM model wi
 3. The model generates a final text response incorporating the tool results
 4. If tool calling is disabled, falls back to plain conversation (no tools)
 
-**Available Tools:** `set_reminder`, `generate_image`, `web_search`, `calculate`, `translate`, `define`, `create_poll`, `convert_timezone`, `convert_units`, `roll_dice`, `schedule_event`
+Tool calling works the same way in @mentions, `/chat` and AI threads.
+
+**Available Tools:**
+
+| Kind | Tools |
+| --- | --- |
+| Actions | `set_reminder`, `cancel_my_reminder`, `generate_image`, `create_poll`, `schedule_event`, `create_thread`, `remember_about_me`, `forget_about_me` |
+| Lookups | `web_search`, `read_web_page`, `read_recent_messages`, `search_conversation_history`, `search_memory`, `get_pinned_messages`, `get_server_info`, `get_member_info`, `list_my_reminders` |
+| Utilities | `calculate`, `roll_dice`, `convert_timezone` |
+
+Lookups stay inside the current channel and its threads. Actions only report success when they actually succeeded, and they're paused for the rest of a reply once Gideon has read a web page or other people's messages.
 
 **Key advantages over the old intent classification system:**
 - Single LLM call instead of two (classification + response)
 - No separate classification model or confidence threshold
-- Supports multi-tool requests (e.g., "calculate 15% of 250 and translate the result to French")
+- Supports multi-tool requests (e.g., "what's 15% of 250? remind me about it at 5pm")
 - Uses full conversation context (the model sees chat history)
 
 ### Admin Dashboard Configuration (Optional)
@@ -276,7 +296,7 @@ The dashboard listens on all interfaces (`0.0.0.0`) by design and is meant for i
 * **Browser hardening** — every response carries a Content-Security-Policy (no inline scripts), `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy: no-referrer`; API responses are never cached.
 * **Backups** — database exports and uploaded files use unique temporary files that are deleted as soon as the request finishes.
 
-Dashboard tests run with the rest of the suite: `python -m unittest discover -s tests`.
+Dashboard tests run with the rest of the suite: `python -m unittest discover -s tests` (see [Development](#-development)).
 
 **Dashboard Sections:**
 
@@ -284,13 +304,13 @@ Press **Ctrl/⌘ + K** anywhere to jump to a tab, setting, channel, thread or pe
 
 | Group | Tab | Description |
 | --- | --- | --- |
-| Core | Overview | Bot status, provider and API key health, recent errors, uptime, latency, quick actions (sync slash commands) |
-| Core | Settings | Global model, provider, system prompt, history limits, memory/session settings and tool calling |
+| Core | Overview | Bot status, provider and API key health, recent errors, uptime, latency, usage and cost (by feature, model and person), quick actions (sync slash commands) |
+| Core | Settings | Global model, provider, system prompt, history limits, memory/session settings, tool calling, streaming, @everyone replies, community (welcomes, unprompted-post limit) and cost controls (utility model, per-user daily limits) |
 | Core | API Keys | Encrypted API key management with test-before-save, import from `.env`, and audit logging |
-| Conversations | Channels | Per-channel model, provider, prompt and memory overrides, showing where each effective value comes from (global, channel or persona) |
+| Conversations | Channels | Per-channel model, provider, prompt, memory and @everyone overrides, showing where each effective value comes from (global, channel or persona) |
 | Conversations | Threads | Manage AI conversation threads (rename, configure, delete) |
 | Conversations | Personas | Browse templates, configure per-channel personas, create custom templates |
-| Conversations | Memory | Browse and manage long-term channel memories; clear memories or trigger summarization |
+| Conversations | Memory | Browse and manage long-term channel memories and per-person notes; clear memories or trigger summarization |
 | Conversations | Messages | Browse stored conversation history with filtering and pagination |
 | Generation | Image Gen | Active image provider, per-provider settings and OpenRouter modalities |
 | Generation | Video Gen | Video model defaults and a test-generation panel |
@@ -353,7 +373,7 @@ Generation typically takes 30 seconds to several minutes; the bot polls until th
 
 ## 🤖 Commands
 
-> **Tip:** Use `/help` in Discord to browse all commands with an interactive menu. Admin commands are automatically hidden from regular users.
+> **Tip:** Use `/help` in Discord to browse all commands with an interactive menu. It's built from the commands that are actually registered, and admin commands are hidden from regular users. When the dashboard is enabled, the `/settings`, `/channel` and `/admin` groups are hidden in favour of the dashboard.
 
 ### General Commands
 
@@ -369,7 +389,34 @@ Generation typically takes 30 seconds to several minutes; the bot polls until th
 | `/memory forget` | Delete Gideon's notes about you in this channel, or everywhere |
 | `/memory optout` / `/memory optin` | Stop (and delete) or resume per-user memory for you in every channel |
 | `/memory forget_user` | Admin: delete Gideon's notes about a member in this channel |
-| `/summarizeurl` | Fetch and summarize the content of a given URL |
+| `/catchup [since] [focus]` | Privately summarize what you missed, since your last message or a time window |
+| `/summarize_url` | Fetch and summarize the content of a given URL |
+| `/setprovider` | Set the AI provider for this channel (needs Manage Channels) |
+
+> `/reset` and `/setprovider` need **Manage Channels**.
+
+### Reminder Commands
+
+| Command | Description |
+| --- | --- |
+| `/remind message when [dm]` | Set a reminder — "in 2 hours", "Friday 6pm", "every weekday at 9am"; `dm` sends it privately |
+| `/listreminders` | List your pending reminders, including repeats |
+| `/cancelreminder id` | Cancel one of your reminders |
+| `/me timezone [timezone]` | Set (or see) your timezone so reminder times mean your local time |
+
+Delivered reminders have **Snooze** (10 min / 1 hour / tomorrow) and **Done** buttons.
+
+### Message Menus
+
+Right-click (or long-press) a message → **Apps**:
+
+| Menu | What it does |
+| --- | --- |
+| **Ask Gideon** | Ask a question about that message; the answer is posted in the channel |
+| **Summarize from here** | Private summary of the conversation from that message on |
+| **Remind me about this** | A reminder that links back to the message |
+| **Translate** | Private translation into your Discord language |
+| **Remember this about me** | Save one of your own messages to your notes in this channel |
 
 ### Persona Commands (Admin)
 
@@ -379,7 +426,7 @@ Configure unique bot identities per channel using Discord webhooks.
 | --- | --- |
 | `/persona set` | Set a custom persona for this channel (name, avatar, system prompt) |
 | `/persona template` | Apply a built-in or custom template to this channel |
-| `/persona view` | View the current persona configuration for this channel |
+| `/persona show` | View the current persona configuration for this channel |
 | `/persona list` | List all channels with configured personas |
 | `/persona templates` | Browse all available persona templates |
 | `/persona toggle` | Enable or disable the persona without removing it |
@@ -396,7 +443,9 @@ Configure unique bot identities per channel using Discord webhooks.
 | `/settings provider` | Set global AI provider (openrouter/openai) |
 | `/settings memory` | Set message history limit |
 | `/settings window` | Set time window for history (hours) |
-| `/settings restore` | Reset all settings to defaults |
+| `/settings tools show` / `toggle` / `max_iterations` | View or change native tool calling |
+| `/settings info` | Detailed configuration information |
+| `/settings reload` | Reload settings from `.env` defaults |
 
 ### Channel Commands (Admin)
 
@@ -422,6 +471,8 @@ Configure unique bot identities per channel using Discord webhooks.
 | `/thread rename` | Change the name of an AI thread |
 | `/thread delete` | Remove an AI thread and its history |
 
+`/thread rename`, `delete`, `model` and `system` are limited to the thread's creator and members with **Manage Threads**. Outside AI threads, @mention Gideon in any thread or forum post to bring it in.
+
 ### Trivia Commands
 
 | Command | Description |
@@ -439,8 +490,9 @@ Configure unique bot identities per channel using Discord webhooks.
 | `/admin sync` | Sync slash commands with Discord (Owner only) |
 | `/admin debug` | Show debug information |
 | `/admin state` | Display database state information |
-| `/admin diagnostic` | Run system diagnostics |
+| `/admin diagnostic` | Connectivity, DNS and model diagnostics |
 | `/admin vision_models` | List all vision-capable AI models |
+| `/admin prune` | Set data pruning frequency |
 
 ### Dashboard Commands (Admin)
 
@@ -478,13 +530,9 @@ Configure unique bot identities per channel using Discord webhooks.
 
 ### Text Models (via OpenRouter)
 
-* **OpenAI**: GPT-4o, GPT-4o-mini, GPT-4 Turbo, etc.
-* **Anthropic**: Claude 3.7 Sonnet, Claude 3 Opus, Claude 3 Haiku, etc.
-* **Google**: Gemini 2.0 Flash, Gemini Pro 1.5, etc.
-* **Meta**: Llama 3 70B, 8B, etc.
-* **Mistral**: Mistral Large, Mixtral 8x22B, etc.
-* **Perplexity**: Sonar Large, Sonar Small
-* **And many more!** Check [OpenRouter.ai](https://openrouter.ai/models) for the full list.
+Any chat model on OpenRouter works — OpenAI GPT, Anthropic Claude, Google Gemini, Meta Llama, Mistral, Perplexity Sonar and many more. Check [OpenRouter.ai](https://openrouter.ai/models) for the current list; the dashboard and autocomplete read it live. For tool calling, pick a model that supports function calling. Streaming replies and web search use OpenRouter; replies from other providers arrive in one piece.
+
+**Tip:** set a small, fast model (e.g. a "flash" or "mini" model) as the **utility model** in the dashboard's Cost controls — it handles summaries, people notes, catch-ups and reminder phrasing for a fraction of the cost.
 
 ### Image Models
 
@@ -518,11 +566,13 @@ gideon/
 │   ├── cogs/                       # Command modules (features)
 │   │   ├── admin_commands.py       # Admin tools (/admin group)
 │   │   ├── channel_commands.py     # Channel settings (/channel group)
-│   │   ├── chat_commands.py        # AI chat (/chat, /reset, etc.)
+│   │   ├── chat_commands.py        # AI chat (/chat, /reset, /memory, etc.)
+│   │   ├── community_commands.py   # Event RSVP buttons & welcomes
+│   │   ├── context_menu_commands.py # /catchup & message menus
 │   │   ├── dashboard_commands.py   # Web admin dashboard (/dashboard)
 │   │   ├── mention_commands.py     # Bot @mention handling & native tool calling
 │   │   ├── persona_commands.py     # Per-channel personas (/persona group)
-│   │   ├── reminder_commands.py    # Reminder management
+│   │   ├── reminder_commands.py    # Reminders, /me timezone, snooze buttons
 │   │   ├── settings_commands.py    # Global settings (/settings group)
 │   │   ├── thread_commands.py      # Thread management (/thread group)
 │   │   ├── trivia_commands.py      # Trivia game system (/trivia group)
@@ -540,21 +590,32 @@ gideon/
 │   └── utils/
 │       ├── ai_horde_client.py
 │       ├── api_key_service.py      # Encrypted API key management
+│       ├── budget.py               # Per-user daily limits & usage recording
+│       ├── catchup.py              # Catch-up transcripts & jump links
 │       ├── cloudflare_client.py
+│       ├── conversation_service.py # The shared reply pipeline (history, prompt, tools, sending)
 │       ├── encryption.py           # Fernet encryption utility
+│       ├── events_service.py       # Event RSVP cards & "starting soon" reminders
 │       ├── game_session.py         # In-memory trivia game state
 │       ├── memory_service.py       # Session rotation, channel memory summarization & per-user notes
 │       ├── user_memory.py          # Per-user note formatting & prompt block
 │       ├── model_manager.py
+│       ├── llm_result.py           # ChatResult: typed LLM results & friendly errors
 │       ├── openai_client.py
-│       ├── openrouter_client.py
+│       ├── openrouter_client.py    # Chat (with retries & streaming)
 │       ├── openrouter_video_client.py # Async OpenRouter video generation client
 │       ├── permissions.py
 │       ├── persona_templates.py    # Built-in persona template definitions
+│       ├── reminder_service.py     # Reminder delivery (persona voice, DM, repeats)
+│       ├── restraint.py            # Hourly budget for unprompted posts
+│       ├── safe_fetch.py           # Fetching user URLs without reaching private addresses
 │       ├── state_manager.py        # Centralized state management
+│       ├── streaming.py            # Streaming replies into paced message edits
+│       ├── time_parse.py           # Natural-language times & repeats in each user's timezone
 │       ├── tool_registry.py        # Native LLM tool definitions & execution
 │       ├── trivia_ai.py
 │       ├── trivia_config.py
+│       ├── usage.py                # Attributing LLM usage to feature, user and channel
 │       ├── webhook_sender.py       # Webhook lifecycle management for personas
 │       ├── dashboard/
 │       │   ├── server.py           # aiohttp web server & API routes
@@ -562,18 +623,24 @@ gideon/
 │       │   └── error_log.py        # Recent-errors ring buffer for the Overview tab
 │       └── database/
 │           ├── core.py             # DatabaseManager (delegates to sub-managers)
-│           ├── schema.py           # Table definitions
+│           ├── schema.py           # Table definitions & versioned migrations
 │           ├── api_key_manager.py
 │           ├── backup_manager.py   # Config/database backup & restore
 │           ├── memory_manager.py   # Channel memory CRUD (CHANNEL_MEMORY table)
 │           ├── user_memory_manager.py # Per-user, per-channel notes (CHANNEL_USER_MEMORY table)
 │           ├── persona_manager.py  # Persona template & channel persona CRUD
+│           ├── event_manager.py    # Events & RSVPs
+│           ├── usage_manager.py    # LLM usage & generation counts (USAGE table)
 │           ├── trivia_manager.py
 │           └── ...
+├── tests/                          # unittest suite (python -m unittest discover -s tests)
+├── .github/workflows/ci.yml        # Lint + tests on every push to Production and every PR
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
+├── pyproject.toml                  # Ruff configuration
 ├── requirements.txt
+├── requirements-dev.txt            # requirements.txt + ruff
 ├── README.md
 ├── CLAUDE.md                       # Developer guide & architecture reference
 └── index.md                        # GitHub Pages landing page
@@ -592,9 +659,24 @@ gideon/
   * Check API keys in `.env` are correct for the features being used.
   * Check the bot's logs for specific error messages.
 
+* **Gideon Doesn't Answer @everyone / @here:**
+  * That's switchable: check *Answer @everyone / @here* in the dashboard Settings and the channel's own override.
+  * Discord only treats it as a ping when the author is allowed to mention everyone.
+
+* **Reminders at the Wrong Time:**
+  * Times use the server's timezone (`TZ` in `.env`) until you run `/me timezone`.
+  * Times shown in Discord (`<t:…>`) always display in each reader's own timezone.
+
+* **Welcomes Not Posting:**
+  * Enable the Server Members intent in the Developer Portal, set `MEMBERS_INTENT=TRUE`, restart, then turn on welcomes in Settings → Community.
+  * Check the welcome channel (or the server's system channel) and the unprompted-post limit.
+
+* **"You've reached today's usage limit":**
+  * Per-user daily limits are set in Settings → Cost controls (0 = unlimited; admins are exempt).
+
 * **Personas Not Showing:**
   * Ensure the bot has **Manage Webhooks** permission in the channel.
-  * Verify the persona is active via `/persona view` or the dashboard Personas tab.
+  * Verify the persona is active via `/persona show` or the dashboard Personas tab.
   * Check logs for webhook creation errors.
 
 * **Image Generation (`/dream`) Failures:**
@@ -612,6 +694,16 @@ gideon/
   * Ensure `DATA_DIRECTORY` (Python) or the Docker volume mount is correct and writable.
   * Check logs for SQLite errors (`database is locked`, `unable to open database file`).
   * Use the dashboard **Backup & Restore** tab to export a backup before troubleshooting.
+
+## 🧪 Development
+
+```bash
+pip install -r requirements-dev.txt
+ruff check src tests
+python -m unittest discover -s tests
+```
+
+GitHub Actions runs both on Python 3.12 for every push to `Production` and every pull request. The database migrates itself on startup (versioned with SQLite's `user_version`), including after restoring an older backup.
 
 ## 📖 Documentation
 
