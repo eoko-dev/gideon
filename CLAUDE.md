@@ -634,13 +634,14 @@ docker-compose down
 - ~~Backup & restore~~ (Implemented in v1.2)
 - ~~Video generation (OpenRouter `/api/v1/videos`)~~ (Implemented)
 - ~~Channel memory system (session rotation + persistent summaries)~~ (Implemented in v1.3)
-- Rate limiting per user/channel
+- ~~Per-user daily usage limits (chat spend, images, videos)~~ (Implemented in v1.6)
+- ~~Streaming responses~~ (Implemented in v1.6)
+- Request rate limiting (cooldowns) per user/channel
 - Advanced permission system beyond admin/non-admin
 - Server templates/presets
-- Streaming responses
 
 ---
 
 **Last Updated**: 2026-10-22
-**Version**: v1.4
+**Version**: v1.6
 **Maintainer**: eoko-dev
