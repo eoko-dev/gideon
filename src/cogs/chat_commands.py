@@ -8,6 +8,7 @@ from discord.ext import commands
 from ..utils.state_manager import BotStateManager
 from ..utils.memory_service import check_and_rotate_session, schedule_compaction
 from ..utils.discord_fmt import chunk_message
+from ..utils.permissions import has_channel_permission
 from ..utils.llm_formatting import collect_mention_targets, apply_outbound_mentions
 # Changed to absolute import: from ..utils.conversation import get_channel_context
 # Removed import for conversation, now handled by state_manager
@@ -398,6 +399,9 @@ class ChatCommands(commands.Cog):
         description="Reset the conversation history for this channel"
     )
     async def reset_slash(self, ctx):
+        if not has_channel_permission(ctx.author, ctx.channel, manage_channels=True):
+            await ctx.respond("⛔ You need **Manage Channels** to reset this channel's history.", ephemeral=True)
+            return
         channel_id = str(ctx.channel.id)
         # clear_channel_history now handles the DB deletion
         if self.state.clear_channel_history(channel_id):
@@ -662,6 +666,9 @@ class ChatCommands(commands.Cog):
     )
     async def setprovider_slash(self, ctx):
         """Set the AI provider for this channel with interactive selection."""
+        if not has_channel_permission(ctx.author, ctx.channel, manage_channels=True):
+            await ctx.respond("⛔ You need **Manage Channels** to change this channel's AI provider.", ephemeral=True)
+            return
         await ctx.defer(ephemeral=True)
 
         try:

@@ -825,7 +825,9 @@ class MentionCommands(commands.Cog):
             # Runs in the background so the summarization call never delays a reply.
             schedule_compaction(channel_id, self.state, self.clients)
 
-        if not is_mentioned:
+        # Other bots and webhooks are kept as context but never answered,
+        # so two bots can't trigger each other in an endless loop
+        if not is_mentioned or message.author.bot or message.webhook_id:
             return
 
         if recorded:

@@ -420,7 +420,11 @@ Logging uses Python's standard `logging` module:
 - **Webhook Credentials**: `webhook_id` and `webhook_token` are stored in the database but excluded from config JSON exports. They are re-applied automatically during config import to prevent loss of Discord integrations
 - **Backup Security**: Config exports exclude API keys entirely, and per-user notes. Full database backups include all data but should be treated as sensitive
 - **Per-User Memory Isolation**: Notes are keyed by `(scope channel, user_id)` and only loaded for the channel a conversation happens in. Extraction only labels people who spoke in that channel's transcript and drops any other label the model returns; the `remember_about_me` / `forget_about_me` tools take their key from the message author and channel, never from model arguments. `/thread message` refuses to run outside the thread or its parent channel, since its reply carries the parent's memory. Notes are framed in the prompt as background facts, never instructions
-- **Permission Controls**: Enforced via Py-Cord decorators (`@commands.is_owner()`, `@commands.has_permissions(administrator=True)`)
+- **Permission Controls**: Enforced via Py-Cord decorators (`@commands.is_owner()`, `@commands.has_permissions(administrator=True)`) and the runtime helpers in `src/utils/permissions.py`: `/reset` and `/setprovider` need Manage Channels; `/thread delete|rename|model|system` need the thread's creator (`THREADS.creator_id`) or Manage Threads, and the thread must belong to the invoking server. The `create_poll` / `schedule_event` tools check the *author's* Send Polls / Create Events permission, since Gideon acts with its own
+- **No mass pings**: `SAFE_ALLOWED_MENTIONS` (`src/utils/discord_fmt.py`) is set on the bot and on every webhook send — replies can ping users but never `@everyone`, `@here` or roles
+- **Bot loops**: messages from other bots and webhooks are recorded as context but never answered
+- **Untrusted URLs**: `/summarize_url` fetches through `src/utils/safe_fetch.py` — http(s) only, a resolver that refuses non-public IPs at connect time (covers redirects and DNS rebinding), a 2 MB body cap. Video downloads only send the OpenRouter key to `openrouter.ai` hosts
+- **Calculator**: the `calculate` tool walks a whitelisted `ast` (no `eval`/sympy), with caps on expression length, exponent size and factorials
 - **Input Validation**: Command inputs and external API responses are validated to prevent injection or malformed data issues
 
 ## Flows Reference

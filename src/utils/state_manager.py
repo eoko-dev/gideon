@@ -546,14 +546,16 @@ class BotStateManager:
 
     # --- Discord Thread Methods ---
 
-    async def add_discord_thread(self, thread_id: str, channel_id: str, name: str):
+    async def add_discord_thread(self, thread_id: str, channel_id: str, name: str,
+                                 creator_id: Optional[str] = None):
         """Adds a thread record to the database."""
         # Database call is synchronous
         self.db_manager.add_thread(
             thread_id=str(thread_id),
             channel_id=str(channel_id),
             name=name,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            creator_id=str(creator_id) if creator_id else None,
         )
 
     async def add_discord_thread_message(self, thread_id: str, message: Dict[str, Any]):

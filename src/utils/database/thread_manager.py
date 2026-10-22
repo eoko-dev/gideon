@@ -11,16 +11,17 @@ class ThreadManager:
     def __init__(self, conn):
         self._conn = conn
 
-    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime):
-        """Adds a new thread record."""
+    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime,
+                   creator_id: Optional[str] = None):
+        """Adds a new thread record. creator_id is the user who asked for it, if known."""
         sql = """
-        INSERT OR IGNORE INTO THREADS (thread_id, channel_id, name, created_at)
-        VALUES (?, ?, ?, ?);
+        INSERT OR IGNORE INTO THREADS (thread_id, channel_id, name, created_at, creator_id)
+        VALUES (?, ?, ?, ?, ?);
         """
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (thread_id, channel_id, name, created_at))
+                cursor.execute(sql, (thread_id, channel_id, name, created_at, creator_id))
             logger.debug(f"Added or ignored thread: {thread_id} in channel {channel_id}")
         except sqlite3.Error as e:
             logger.error(f"Error adding thread '{thread_id}': {e}", exc_info=True)
@@ -28,7 +29,7 @@ class ThreadManager:
 
     def get_thread_info(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Gets information about a specific thread."""
-        sql = "SELECT thread_id, channel_id, name, created_at FROM THREADS WHERE thread_id = ?;"
+        sql = "SELECT thread_id, channel_id, name, created_at, creator_id FROM THREADS WHERE thread_id = ?;"
         try:
             cursor = self._conn.cursor()
             cursor.execute(sql, (thread_id,))

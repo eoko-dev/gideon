@@ -252,6 +252,7 @@ class SchemaManager:
                 SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "user_name", "TEXT")
                 SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "is_bot", "INTEGER")
                 SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "user_memory_enabled", "INTEGER")
+                SchemaManager._add_column_if_not_exists(cursor, "THREADS", "creator_id", "TEXT")
                 SchemaManager._create_memory_fts(cursor)
 
                 logger.info("Database schema migration checks complete.")

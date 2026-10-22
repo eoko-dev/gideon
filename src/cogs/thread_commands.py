@@ -3,6 +3,7 @@ import discord
 import logging
 from discord.ext import commands
 from ..utils.discord_fmt import chunk_message
+from ..utils.permissions import can_manage_ai_thread
 from ..utils.llm_formatting import resolve_discord_mentions, collect_mention_targets, apply_outbound_mentions
 from ..config import SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
 from datetime import datetime, timedelta
@@ -108,7 +109,8 @@ class ThreadCommands(commands.Cog):
             await self.state.add_discord_thread(
                 thread_id=thread_id,
                 channel_id=channel_id,
-                name=name
+                name=name,
+                creator_id=str(ctx.author.id),
                 # created_at is set in the state manager/database
             )
 
@@ -370,6 +372,8 @@ class ThreadCommands(commands.Cog):
 
     @thread.command(name="delete", description="Delete a conversation thread")
     async def delete_thread_slash(self, ctx, id: str):
+        if not await self._ensure_can_manage(ctx, id):
+            return
         # Delete thread from the database
         thread_deleted = self.state.delete_discord_thread(id)
 
@@ -389,6 +393,8 @@ class ThreadCommands(commands.Cog):
 
     @thread.command(name="rename", description="Rename a conversation thread")
     async def rename_thread_slash(self, ctx, id: str, name: str):
+        if not await self._ensure_can_manage(ctx, id):
+            return
         # Rename thread in the database
         thread_renamed = self.state.rename_discord_thread(id, name)
 
@@ -492,8 +498,10 @@ class ThreadCommands(commands.Cog):
             await ctx.respond("⚠️ This command can only be used within a thread.")
             return
 
-        await ctx.defer()
         thread_id = str(ctx.channel.id)
+        if not await self._ensure_can_manage(ctx, thread_id):
+            return
+        await ctx.defer()
 
         try:
             # Remove the ✓ prefix if present (from autocomplete selection)
@@ -527,8 +535,10 @@ class ThreadCommands(commands.Cog):
             await ctx.respond("⚠️ This command can only be used within a thread.")
             return
 
-        await ctx.defer()
         thread_id = str(ctx.channel.id)
+        if not await self._ensure_can_manage(ctx, thread_id):
+            return
+        await ctx.defer()
 
         try:
             # Use the state manager's method
@@ -545,6 +555,19 @@ class ThreadCommands(commands.Cog):
             logger.error(f"Error setting thread system prompt: {e}", exc_info=True)
             await ctx.respond(f"❌ Error: {e}", ephemeral=True)
 
+
+    async def _ensure_can_manage(self, ctx, thread_id: str) -> bool:
+        """Responds with an error and returns False unless ctx.author may manage the thread."""
+        thread_data = self.state.get_discord_thread(str(thread_id).strip())
+        if not thread_data:
+            await ctx.respond("⚠️ Thread not found in the database. Use `/thread list` to see available threads.",
+                              ephemeral=True)
+            return False
+        if not can_manage_ai_thread(self.bot, ctx, thread_data):
+            await ctx.respond("⛔ Only the thread's creator or members with **Manage Threads** can do that.",
+                              ephemeral=True)
+            return False
+        return True
 
     def _is_own_persona_webhook(self, message: discord.Message, channel_id: str) -> bool:
         """True if this message is one the bot sent through its persona webhook.
@@ -616,6 +639,11 @@ class ThreadCommands(commands.Cog):
                 "content": resolve_discord_mentions(message),
                 # timestamp is added in add_discord_thread_message
             })
+
+            # Other bots and webhooks are kept as context but never answered,
+            # so two bots can't trigger each other in an endless loop
+            if message.author.bot or message.webhook_id:
+                return
 
             # Get conversation context from the database history for this thread,
             # bounded by the configured time window

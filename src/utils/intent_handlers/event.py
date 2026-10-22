@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 import discord
 
+from ..permissions import can_create_events
 from ..timeutil import to_aware, to_epoch
 
 logger = logging.getLogger('event_handler')
@@ -61,8 +62,13 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
 
         # Try to create Discord scheduled event (if supported)
         # Note: py-cord API varies by version, so we try multiple approaches
+        # Gideon creates the event with its own permissions, so only members who
+        # could create one themselves get a server event; others get a reminder
         discord_event_created = False
-        if hasattr(message.guild, 'create_scheduled_event'):
+        author_can_create = can_create_events(message.author, message.channel)
+        if not author_can_create:
+            logger.info(f"[Event] User {message.author.id} lacks Create Events; using a reminder instead")
+        if author_can_create and getattr(message, 'guild', None) and hasattr(message.guild, 'create_scheduled_event'):
             try:
                 # Make parsed_time timezone-aware for Discord API
                 # (parsed_time is naive but represents server-local time)
@@ -140,7 +146,7 @@ async def handle_event_scheduling(cog, message, channel_id, event_name, date_tim
         # Format confirmation
         confirmation = (
             f"✅ **Event Reminder Set!**\n"
-            f"*(Note: Discord events not available, created reminder instead)*\n"
+            f"*(Note: I couldn't create a server event, so I set a reminder instead)*\n"
             f"**Event:** {event_name}\n"
             f"**When:** <t:{event_timestamp}:F> (<t:{event_timestamp}:R>)\n"
             f"**Duration:** {duration} minutes\n"

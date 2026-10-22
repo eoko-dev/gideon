@@ -1,7 +1,6 @@
 py-cord==2.8.1          # Discord API framework (cogs + slash commands)
 aiohttp==3.14.*          # Async HTTP for LLM/image provider clients + dashboard
 python-dotenv==1.2.*     # .env loading
-sympy==1.14.*            # Safe mathematical expression evaluation (calculate tool)
 beautifulsoup4==4.15.*   # HTML parsing for URL summarization
 openai==3.*              # OpenAI API access (chat + DALL-E)
 cryptography==50.0.2       # Fernet encryption of API keys — keep current, gets CVEs

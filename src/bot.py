@@ -27,6 +27,7 @@ from .utils.openrouter_client import OpenRouterClient
 from .utils.openai_client import OpenAIClient
 from .utils.ai_horde_client import AIHordeClient
 from .utils.model_manager import ProviderManager
+from .utils.discord_fmt import SAFE_ALLOWED_MENTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ bot = commands.Bot(
     command_prefix="unused!",
     intents=intents,
     sync_commands=False,
+    allowed_mentions=SAFE_ALLOWED_MENTIONS,
 )
 bot.start_time = time.time()
 

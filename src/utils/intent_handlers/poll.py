@@ -4,6 +4,8 @@ import logging
 from datetime import datetime
 import discord
 
+from ..permissions import has_channel_permission
+
 logger = logging.getLogger('poll_handler')
 
 
@@ -41,6 +43,14 @@ async def handle_poll_creation(cog, message, channel_id, question, options, dura
             "❌ Maximum 10 poll options allowed. Please reduce the number of options."
         )
         logger.warning(f"[Poll] Too many options ({len(options)}) for user {message.author.id}")
+        return
+
+    # Gideon posts the poll with its own permissions, so the author must be
+    # allowed to post one themselves
+    if getattr(message, 'guild', None) and not has_channel_permission(
+            message.author, message.channel, send_polls=True):
+        await message.channel.send("⛔ You don't have permission to create polls in this channel.")
+        logger.info(f"[Poll] User {message.author.id} lacks Send Polls in channel {channel_id}")
         return
 
     try:

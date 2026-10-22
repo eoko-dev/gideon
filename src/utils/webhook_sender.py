@@ -4,6 +4,8 @@ import logging
 import asyncio
 from typing import Optional, Dict, List
 
+from .discord_fmt import SAFE_ALLOWED_MENTIONS
+
 logger = logging.getLogger(__name__)
 
 WEBHOOK_NAME_PREFIX = "Gideon Persona"
@@ -173,6 +175,7 @@ class WebhookSender:
             "content": content,
             "username": persona['display_name'],
             "wait": True,
+            "allowed_mentions": SAFE_ALLOWED_MENTIONS,
         }
         if persona.get('avatar_url'):
             kwargs["avatar_url"] = persona['avatar_url']
@@ -193,7 +196,7 @@ class WebhookSender:
         files: Optional[List[discord.File]] = None,
     ) -> Optional[discord.Message]:
         """Standard bot account send (no webhook)."""
-        kwargs = {}
+        kwargs = {"allowed_mentions": SAFE_ALLOWED_MENTIONS}
         if content:
             kwargs["content"] = content
         if embeds:

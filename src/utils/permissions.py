@@ -83,3 +83,51 @@ def has_commands_scope(bot, guild_id):
     # The best we can do is catch failed command registrations in try/except blocks
     logger.info(f"Checking if bot has applications.commands scope in guild {guild_id}")
     return True
+
+
+def has_channel_permission(member, channel, **perms) -> bool:
+    """True if member holds every named permission (or Administrator) in channel.
+
+    Works for threads too: Discord resolves a thread's permissions from its
+    parent. Returns False for DMs or unresolved members.
+    """
+    if member is None or channel is None or not perms:
+        return False
+    try:
+        resolved = channel.permissions_for(member)
+    except Exception:
+        return False
+    if resolved.administrator:
+        return True
+    return all(getattr(resolved, name, False) for name in perms)
+
+
+def can_manage_ai_thread(bot, ctx, thread_data: dict) -> bool:
+    """Whether ctx.author may rename, delete or reconfigure a tracked AI thread.
+
+    The thread must belong to the invoking server, and the author must have
+    created it with /thread new or hold Manage Threads in its parent channel.
+    """
+    guild = getattr(ctx, "guild", None)
+    if guild is None or not thread_data:
+        return False
+    parent = bot.get_channel(int(thread_data["channel_id"])) if thread_data.get("channel_id") else None
+    if parent is None or getattr(parent, "guild", None) != guild:
+        return False
+    if thread_data.get("creator_id") and str(thread_data["creator_id"]) == str(ctx.author.id):
+        return True
+    return has_channel_permission(ctx.author, parent, manage_threads=True)
+
+
+# Discord's CREATE_EVENTS bit (1 << 44); py-cord has no named attribute for it yet
+_CREATE_EVENTS_BIT = 1 << 44
+
+
+def can_create_events(member, channel) -> bool:
+    """True if member may create scheduled events (Create or Manage Events, or admin)."""
+    if has_channel_permission(member, channel, manage_events=True):
+        return True
+    try:
+        return bool(channel.permissions_for(member).value & _CREATE_EVENTS_BIT)
+    except Exception:
+        return False

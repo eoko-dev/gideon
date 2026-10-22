@@ -163,11 +163,12 @@ class DatabaseManager:
 
     # --- Thread Methods (delegate to ThreadManager) ---
 
-    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime):
+    def add_thread(self, thread_id: str, channel_id: str, name: str, created_at: datetime,
+                   creator_id: Optional[str] = None):
         """Adds a new thread record."""
         # Ensure the parent channel exists first
         self._ensure_channel_exists(channel_id)
-        return self._threads.add_thread(thread_id, channel_id, name, created_at)
+        return self._threads.add_thread(thread_id, channel_id, name, created_at, creator_id)
 
     def get_thread_info(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Gets information about a specific thread."""
