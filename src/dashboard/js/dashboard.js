@@ -76,6 +76,7 @@
         tool_calling_enabled: 'tool-calling-enabled',
         tool_calling_max_iterations: 'tool-calling-max-iterations',
         respond_to_everyone: 'setting-respond-everyone',
+        stream_replies: 'setting-stream-replies',
         utility_model: 'setting-utility-model',
         daily_user_cost_budget: 'setting-cost-budget',
         daily_user_image_limit: 'setting-image-limit',
@@ -890,6 +891,7 @@
         updateToolCallingLabel();
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
         $('#setting-respond-everyone').value = data.respond_to_everyone === false ? 'false' : 'true';
+        $('#setting-stream-replies').value = data.stream_replies === false ? 'false' : 'true';
 
         $('#setting-utility-model').value = data.utility_model || '';
         $('#setting-cost-budget').value = data.daily_user_cost_budget != null ? data.daily_user_cost_budget : 0;
@@ -1006,7 +1008,8 @@
             await api('PUT', '/api/settings', {
                 tool_calling_enabled: $('#tool-calling-enabled').checked,
                 tool_calling_max_iterations: iterations,
-                respond_to_everyone: $('#setting-respond-everyone').value === 'true'
+                respond_to_everyone: $('#setting-respond-everyone').value === 'true',
+                stream_replies: $('#setting-stream-replies').value === 'true'
             });
             markOwnWrite();
             showSaveStatus('tool-calling-save-status', 'Tool calling settings saved', false);

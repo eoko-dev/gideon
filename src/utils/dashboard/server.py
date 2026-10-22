@@ -56,7 +56,7 @@ SETTINGS_INT_RANGES = {
 # Daily per-user LLM spend cap in USD (0 = unlimited)
 COST_BUDGET_RANGE = (0.0, 1000.0)
 SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled',
-                        'respond_to_everyone')
+                        'respond_to_everyone', 'stream_replies')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
@@ -541,6 +541,7 @@ class DashboardServer:
             'tool_calling_enabled': state.get_tool_calling_enabled(),
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
             'respond_to_everyone': state.get_respond_to_everyone(),
+            'stream_replies': state.get_stream_replies(),
             'utility_model': state.get_utility_model(),
             'daily_user_cost_budget': state.get_daily_user_cost_budget(),
             'daily_user_image_limit': state.get_daily_user_image_limit(),
@@ -625,6 +626,7 @@ class DashboardServer:
             'tool_calling_enabled': state.set_tool_calling_enabled,
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
             'respond_to_everyone': state.set_respond_to_everyone,
+            'stream_replies': state.set_stream_replies,
             'utility_model': state.set_utility_model,
             'daily_user_cost_budget': state.set_daily_user_cost_budget,
             'daily_user_image_limit': state.set_daily_user_image_limit,

@@ -139,6 +139,11 @@ async def call_chat(client, *, messages, model=None, system_prompt=None, **kwarg
     """
     if client is None:
         return ChatResult.failure(UNAVAILABLE, model)
+    # Only clients that can stream get the callback
+    if not getattr(client, "supports_streaming", False):
+        kwargs.pop("on_delta", None)
+    elif kwargs.get("on_delta") is None:
+        kwargs.pop("on_delta", None)
     chat = getattr(client, "chat", None)
     if chat is not None and callable(chat) and getattr(client, "supports_chat_result", False):
         return await chat(messages=messages, model=model, system_prompt=system_prompt, **kwargs)

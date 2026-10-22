@@ -6,7 +6,7 @@ import logging
 import base64
 from datetime import datetime, timedelta
 from io import BytesIO
-from typing import List, Dict, Any, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from . import llm_result
 from .llm_formatting import flatten_system_prompt, prepare_llm_messages, split_system_prompt
@@ -41,6 +41,8 @@ class OpenRouterClient:
 
     # chat() returns a ChatResult; see llm_result.call_chat
     supports_chat_result = True
+    # chat(on_delta=...) streams tokens
+    supports_streaming = True
     
     def __init__(self, api_key: str, system_prompt: str, default_model: str):
         self.api_key = api_key
@@ -192,12 +194,18 @@ class OpenRouterClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         max_attempts: int = 3,
+        on_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> ChatResult:
         """Sends a conversation to the model and returns a ChatResult.
 
         Rate limits, timeouts, network failures and 5xx responses are retried
         with jittered backoff. Errors come back as ChatResult.failure with a
         user-facing message; raw provider output is only logged.
+
+        With ``on_delta`` the response is streamed: it is awaited with the
+        text received so far as tokens arrive. Tool calls are still collected
+        and returned in the result. A stream is only retried if it failed
+        before any text arrived.
         """
         prompt_to_use = system_prompt if system_prompt is not None else self.system_prompt
         model_to_use = model if model is not None else self.model
@@ -246,9 +254,18 @@ class OpenRouterClient:
             "X-Client": "openrouter-python"
         }
 
+        if on_delta is not None:
+            payload["stream"] = True
+
         result = ChatResult.failure(llm_result.PROVIDER, api_model_name, provider="openrouter")
         for attempt in range(max_attempts):
-            result, retry_after = await self._post_chat(payload, headers, api_model_name)
+            if on_delta is not None:
+                result, retry_after, streamed = await self._post_chat_stream(payload, headers, api_model_name,
+                                                                             on_delta)
+                if streamed and not result.ok:
+                    break
+            else:
+                result, retry_after = await self._post_chat(payload, headers, api_model_name)
             if result.ok or result.error_kind not in llm_result.RETRYABLE_KINDS:
                 break
             if attempt + 1 < max_attempts:
@@ -286,6 +303,70 @@ class OpenRouterClient:
             return ChatResult.failure(llm_result.BAD_RESPONSE, model, detail=repr(e), provider="openrouter"), None
 
         return self._parse_chat_response(data, model), None
+
+    async def _post_chat_stream(self, payload: Dict[str, Any], headers: Dict[str, str], model: str,
+                                on_delta: Callable[[str], Awaitable[None]]):
+        """One streamed chat request. Returns (ChatResult, retry_after, any_text_streamed)."""
+        text_parts: List[str] = []
+        tool_calls: Dict[int, Dict[str, Any]] = {}
+        usage: Dict[str, Any] = {}
+        model_used = model
+        try:
+            session = self._get_session()
+            async with session.post(f"{self.base_url}/chat/completions",
+                                    headers=headers, json=payload) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                    kind = llm_result.kind_for_status(response.status, error_text)
+                    return ChatResult.failure(kind, model, detail=f"{response.status}: {error_text}",
+                                              provider="openrouter"), retry_after, False
+
+                async for raw_line in response.content:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    # SSE comments (": OPENROUTER PROCESSING") keep the connection alive
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if chunk.get("error"):
+                        error = chunk["error"] if isinstance(chunk["error"], dict) else {"message": str(chunk["error"])}
+                        code = error.get("code")
+                        kind = llm_result.kind_for_status(code if isinstance(code, int) else 500,
+                                                          str(error.get("message", "")))
+                        return (ChatResult.failure(kind, model, detail=json.dumps(error)[:500], provider="openrouter"),
+                                None, bool(text_parts))
+                    model_used = chunk.get("model") or model_used
+                    if chunk.get("usage"):
+                        usage = _normalize_usage(chunk["usage"])
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        if delta.get("content"):
+                            text_parts.append(delta["content"])
+                            await on_delta("".join(text_parts))
+                        for call in delta.get("tool_calls") or []:
+                            slot = tool_calls.setdefault(call.get("index", 0), {
+                                "id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if call.get("id"):
+                                slot["id"] = call["id"]
+                            function = call.get("function") or {}
+                            slot["function"]["name"] += function.get("name") or ""
+                            slot["function"]["arguments"] += function.get("arguments") or ""
+        except asyncio.TimeoutError as e:
+            return (ChatResult.failure(llm_result.TIMEOUT, model, detail=repr(e), provider="openrouter"),
+                    None, bool(text_parts))
+        except aiohttp.ClientError as e:
+            return (ChatResult.failure(llm_result.NETWORK, model, detail=repr(e), provider="openrouter"),
+                    None, bool(text_parts))
+
+        calls = [tool_calls[i] for i in sorted(tool_calls)] or None
+        return ChatResult(content="".join(text_parts), tool_calls=calls, usage=usage,
+                          model=model_used, provider="openrouter"), None, bool(text_parts)
 
     @staticmethod
     def _parse_chat_response(data: Any, model: str) -> ChatResult:

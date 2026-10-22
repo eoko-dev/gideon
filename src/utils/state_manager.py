@@ -50,6 +50,7 @@ CONFIG_KEY_MAX_MEMORY_SUMMARIES = "max_memory_summaries"
 CONFIG_KEY_USER_MEMORY_ENABLED = "user_memory_enabled"
 CONFIG_KEY_TOOL_CALLING_MAX_ITERATIONS = "tool_calling_max_iterations"
 CONFIG_KEY_RESPOND_TO_EVERYONE = "respond_to_everyone"
+CONFIG_KEY_STREAM_REPLIES = "stream_replies"
 CONFIG_KEY_UTILITY_MODEL = "utility_model"
 CONFIG_KEY_DAILY_COST_BUDGET = "daily_user_cost_budget"
 CONFIG_KEY_DAILY_IMAGE_LIMIT = "daily_user_image_limit"
@@ -108,6 +109,9 @@ class BotStateManager:
 
         # Whether @everyone/@here counts as mentioning Gideon (per-channel override in CHANNEL_CONFIG)
         self.respond_to_everyone = await self._load_or_set_config(CONFIG_KEY_RESPOND_TO_EVERYONE, True, 'bool')
+
+        # Show replies as they're generated (paced message edits)
+        self.stream_replies = await self._load_or_set_config(CONFIG_KEY_STREAM_REPLIES, True, 'bool')
 
         # Cheap model for background work (summaries, notes, time parsing);
         # None means "use the channel's own model"
@@ -320,6 +324,13 @@ class BotStateManager:
         if val is not None:
             return bool(int(val))
         return self.user_memory_enabled
+
+    def get_stream_replies(self) -> bool:
+        return bool(self.stream_replies)
+
+    async def set_stream_replies(self, value: bool):
+        self.stream_replies = bool(value)
+        await self._save_config(CONFIG_KEY_STREAM_REPLIES, self.stream_replies, 'bool')
 
     def get_respond_to_everyone(self) -> bool:
         return bool(self.respond_to_everyone)

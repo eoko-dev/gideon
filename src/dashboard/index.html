@@ -426,6 +426,14 @@
                                         </select>
                                         <small class="field-hint">Default for all channels. Each channel can override this in its settings.</small>
                                     </div>
+                                    <div class="field">
+                                        <label for="setting-stream-replies">Stream replies</label>
+                                        <select id="setting-stream-replies">
+                                            <option value="true">On - show replies as they're written</option>
+                                            <option value="false">Off - post each reply when it's finished</option>
+                                        </select>
+                                        <small class="field-hint">Streaming works with OpenRouter models; other providers always post finished replies.</small>
+                                    </div>
                                 </div>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save tool calling settings</button>

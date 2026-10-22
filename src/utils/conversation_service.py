@@ -35,7 +35,27 @@ from .llm_formatting import apply_outbound_mentions, collect_mention_targets
 from .llm_result import ChatResult, call_chat
 from .memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from .tool_registry import execute_tool, get_tool_definitions, is_no_repeat_tool
+from .streaming import StreamingReply
 from .usage import usage_scope
+
+_TOOL_STATUS = {
+    "web_search": "🔎 Searching the web…",
+    "generate_image": "🎨 Creating an image…",
+    "set_reminder": "⏰ Setting a reminder…",
+    "create_poll": "📊 Creating a poll…",
+    "schedule_event": "📅 Scheduling the event…",
+    "calculate": "🧮 Calculating…",
+    "remember_about_me": "📝 Noting that down…",
+    "forget_about_me": "🧹 Forgetting that…",
+}
+
+
+def tool_status_line(tool_names: List[str]) -> str:
+    """Status shown while tools run, e.g. "🔎 Searching the web…"."""
+    for name in tool_names:
+        if name in _TOOL_STATUS:
+            return f"*{_TOOL_STATUS[name]}*"
+    return "*🔧 Working on it…*"
 
 logger = logging.getLogger(__name__)
 
@@ -240,21 +260,27 @@ class ConversationService:
 
     async def generate(self, client, model_name: str, history: List[Dict[str, Any]],
                        system_prompt: str, images: Optional[List[Dict[str, Any]]] = None,
-                       tool_context: Optional[Dict[str, Any]] = None) -> ChatResult:
-        """One reply: the tool loop when ``tool_context`` is given, else a plain call."""
+                       tool_context: Optional[Dict[str, Any]] = None,
+                       streamer: Optional[StreamingReply] = None) -> ChatResult:
+        """One reply: the tool loop when ``tool_context`` is given, else a plain call.
+
+        With a ``streamer`` the text is shown in Discord as it's generated.
+        """
         if client is None:
             return ChatResult.failure(llm_result.UNAVAILABLE, model_name)
+        on_delta = streamer.update if streamer is not None else None
         if tool_context is not None:
             return await self._run_tool_loop(client, history, model_name, system_prompt,
-                                             images, tool_context)
+                                             images, tool_context, streamer)
         result = await call_chat(client, messages=history, model=model_name,
-                                 system_prompt=system_prompt, images=images or [])
+                                 system_prompt=system_prompt, images=images or [], on_delta=on_delta)
         return result
 
     async def _run_tool_loop(self, client, conversation_context: List[Dict[str, Any]],
                              model_name: str, system_prompt: Optional[str],
                              images: Optional[List[Dict[str, Any]]],
-                             tool_context: Dict[str, Any]) -> ChatResult:
+                             tool_context: Dict[str, Any],
+                             streamer: Optional[StreamingReply] = None) -> ChatResult:
         """Runs the model with tools, feeding results back until it produces text.
 
         Each round's tool results are appended to the conversation so the model
@@ -264,15 +290,19 @@ class ConversationService:
         max_iterations = self.state.get_tool_calling_max_iterations()
         executed_calls: set = set()
 
+        on_delta = streamer.update if streamer is not None else None
         for iteration in range(max_iterations):
             result = await call_chat(
                 client, messages=conversation_context, model=model_name,
                 system_prompt=system_prompt, images=images if iteration == 0 else None,
-                tools=tools, tool_choice="auto")
+                tools=tools, tool_choice="auto", on_delta=on_delta)
             if not result.ok or not result.tool_calls:
                 return result
 
             tool_calls = result.tool_calls
+            if streamer is not None:
+                names = [tc.get("function", {}).get("name", "") for tc in tool_calls]
+                await streamer.status(tool_status_line(names))
             logger.info(f"[Tool] Iteration {iteration + 1}/{max_iterations}: "
                         f"model requested {len(tool_calls)} tool call(s)")
 
@@ -317,7 +347,7 @@ class ConversationService:
         # Iteration budget exhausted — force a text answer (no tools offered)
         logger.warning(f"[Tool] Iteration budget ({max_iterations}) exhausted; forcing text response")
         return await call_chat(client, messages=conversation_context, model=model_name,
-                               system_prompt=system_prompt)
+                               system_prompt=system_prompt, on_delta=on_delta)
 
     # ─── Sending ────────────────────────────────────────────────────────────
 
@@ -386,32 +416,56 @@ class ConversationService:
                     "cog": self.bot.get_cog("MentionCommands") if hasattr(self.bot, "get_cog") else None,
                 }
 
-            typing = getattr(conversation.channel, "typing", None)
-            if typing is not None:
-                async with typing():
-                    result = await self.generate(client, model_name, history, system_prompt,
-                                                 images, tool_context)
-            else:
-                result = await self.generate(client, model_name, history, system_prompt,
-                                             images, tool_context)
-
-            if not result.ok:
-                await self.send_error(conversation, result)
-                return result
-
-            text = result.text.strip()
-            if not text:
-                # Tools may have done all the talking (image, poll, reminder)
-                if tool_context is None:
-                    logger.warning("[Conversation] Model returned an empty reply")
-                return result
-
-            await self.record(conversation, {"role": "assistant", "content": text})
             people = [request.author, *getattr(request.message, "mentions", []), *request.extra_people]
             # Reply to the triggering message when it's a real one in this channel
             reply_to = request.message if (
                 isinstance(request.message, discord.Message)
                 and getattr(request.message.channel, "id", None) == getattr(conversation.channel, "id", None)
             ) else None
+            streamer = self._streamer(conversation, client, history, people, reply_to)
+
+            typing = getattr(conversation.channel, "typing", None)
+            if typing is not None:
+                async with typing():
+                    result = await self.generate(client, model_name, history, system_prompt,
+                                                 images, tool_context, streamer)
+            else:
+                result = await self.generate(client, model_name, history, system_prompt,
+                                             images, tool_context, streamer)
+
+            streamed = streamer is not None and streamer.started and not streamer.failed
+            if not result.ok:
+                if streamed:
+                    await streamer.fail(f"⚠️ {result.error}")
+                else:
+                    await self.send_error(conversation, result)
+                return result
+
+            text = result.text.strip()
+            if not text:
+                # Tools may have done all the talking (image, poll, reminder)
+                if streamer is not None:
+                    await streamer.finish("")
+                if tool_context is None:
+                    logger.warning("[Conversation] Model returned an empty reply")
+                return result
+
+            await self.record(conversation, {"role": "assistant", "content": text})
+            if streamed and await streamer.finish(text):
+                return result
+            if streamer is not None and streamer.started:
+                await streamer.discard()
             await self.send(conversation, text, history, people, reply_to=reply_to)
             return result
+
+    def _streamer(self, conversation: Conversation, client, history, people, reply_to):
+        """A StreamingReply when the client can stream and streaming is on, else None."""
+        if not getattr(client, "supports_streaming", False):
+            return None
+        enabled = getattr(self.state, "get_stream_replies", None)
+        if enabled is None or not enabled():
+            return None
+        targets = collect_mention_targets(history or [], [p for p in people if p])
+        return StreamingReply(self.bot.webhook_sender, conversation.channel, conversation.channel_id,
+                              transform=lambda text: apply_outbound_mentions(text, targets),
+                              reply_to=reply_to)
