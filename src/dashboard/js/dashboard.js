@@ -75,6 +75,7 @@
         user_memory_enabled: 'setting-user-memory',
         tool_calling_enabled: 'tool-calling-enabled',
         tool_calling_max_iterations: 'tool-calling-max-iterations',
+        respond_to_everyone: 'setting-respond-everyone',
         utility_model: 'setting-utility-model',
         daily_user_cost_budget: 'setting-cost-budget',
         daily_user_image_limit: 'setting-image-limit',
@@ -88,7 +89,8 @@
         session_timeout_hours: 'channel-edit-timeout',
         memory_summary_enabled: 'channel-edit-summary',
         max_memory_summaries: 'channel-edit-max-summaries',
-        user_memory_enabled: 'channel-edit-user-memory'
+        user_memory_enabled: 'channel-edit-user-memory',
+        respond_to_everyone: 'channel-edit-everyone'
     };
 
     var OVERRIDE_LABELS = {
@@ -98,7 +100,8 @@
         session_timeout_hours: 'Timeout',
         memory_summary_enabled: 'Summaries',
         max_memory_summaries: 'Max summaries',
-        user_memory_enabled: 'Per-user memory'
+        user_memory_enabled: 'Per-user memory',
+        respond_to_everyone: '@everyone'
     };
 
     var formTrackers = {};
@@ -886,6 +889,7 @@
         $('#tool-calling-enabled').checked = tcEnabled;
         updateToolCallingLabel();
         $('#tool-calling-max-iterations').value = data.tool_calling_max_iterations || 3;
+        $('#setting-respond-everyone').value = data.respond_to_everyone === false ? 'false' : 'true';
 
         $('#setting-utility-model').value = data.utility_model || '';
         $('#setting-cost-budget').value = data.daily_user_cost_budget != null ? data.daily_user_cost_budget : 0;
@@ -1001,7 +1005,8 @@
         try {
             await api('PUT', '/api/settings', {
                 tool_calling_enabled: $('#tool-calling-enabled').checked,
-                tool_calling_max_iterations: iterations
+                tool_calling_max_iterations: iterations,
+                respond_to_everyone: $('#setting-respond-everyone').value === 'true'
             });
             markOwnWrite();
             showSaveStatus('tool-calling-save-status', 'Tool calling settings saved', false);
@@ -1207,6 +1212,15 @@
                         : formatSummaryFlag(g.user_memory_enabled !== false);
                 },
                 global: function () { return formatSummaryFlag(g.user_memory_enabled !== false); }
+            },
+            {
+                key: 'respond_to_everyone', hint: '#channel-everyone-hint',
+                hasValue: function () { return $('#channel-edit-everyone').value !== ''; },
+                effective: function (source) {
+                    return source === 'channel' ? formatSummaryFlag($('#channel-edit-everyone').value)
+                        : formatSummaryFlag(g.respond_to_everyone !== false);
+                },
+                global: function () { return formatSummaryFlag(g.respond_to_everyone !== false); }
             }
         ];
     }
@@ -1273,6 +1287,7 @@
         $('#channel-edit-summary').value = data.memory_summary_enabled == null ? '' : String(data.memory_summary_enabled);
         $('#channel-edit-max-summaries').value = data.max_memory_summaries != null ? data.max_memory_summaries : '';
         $('#channel-edit-user-memory').value = data.user_memory_enabled == null ? '' : String(!!data.user_memory_enabled);
+        $('#channel-edit-everyone').value = data.respond_to_everyone == null ? '' : String(!!data.respond_to_everyone);
 
         var note = $('#channel-persona-note');
         var persona = data.persona;
@@ -1337,13 +1352,15 @@
 
         var summary = $('#channel-edit-summary').value;
         var userMemory = $('#channel-edit-user-memory').value;
+        var everyone = $('#channel-edit-everyone').value;
         var body = {
             model: $('#channel-edit-model').value || null,
             system_prompt: $('#channel-edit-prompt').value || null,
             session_timeout_hours: timeout,
             memory_summary_enabled: summary === '' ? null : summary === 'true',
             max_memory_summaries: maxSummaries,
-            user_memory_enabled: userMemory === '' ? null : userMemory === 'true'
+            user_memory_enabled: userMemory === '' ? null : userMemory === 'true',
+            respond_to_everyone: everyone === '' ? null : everyone === 'true'
         };
         if (provider) body.provider = provider;
 
@@ -3566,7 +3583,7 @@
         bindEvent('#channel-edit-form', 'submit', saveChannel);
         bindEvent('#channel-reset-btn', 'click', resetChannel);
         bindEvent('#channel-edit-provider', 'change', onChannelProviderChange);
-        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory'].forEach(function (sel) {
+        ['#channel-edit-model', '#channel-edit-prompt', '#channel-edit-timeout', '#channel-edit-summary', '#channel-edit-max-summaries', '#channel-edit-user-memory', '#channel-edit-everyone'].forEach(function (sel) {
             bindEvent(sel, 'input', updateSourceChips);
             bindEvent(sel, 'change', updateSourceChips);
         });

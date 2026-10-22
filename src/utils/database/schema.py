@@ -299,9 +299,15 @@ class SchemaManager:
         cursor.execute("DELETE FROM MESSAGES WHERE thread_id IS NOT NULL "
                        "AND thread_id NOT IN (SELECT thread_id FROM THREADS);")
 
+    @staticmethod
+    def _migration_3_respond_to_everyone(cursor):
+        # NULL = inherit the global respond_to_everyone setting
+        SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "respond_to_everyone", "INTEGER")
+
     MIGRATIONS = (
         (1, "_migration_1_baseline"),
         (2, "_migration_2_thread_creator"),
+        (3, "_migration_3_respond_to_everyone"),
     )
 
     @staticmethod

@@ -5,13 +5,19 @@ from discord.ext import commands
 from ..utils.discord_fmt import chunk_message
 from ..utils.permissions import can_manage_ai_thread
 from ..utils.conversation_service import Conversation, ConversationService, MessageLike, ReplyRequest
-from ..utils.llm_formatting import resolve_discord_mentions
+from ..utils.llm_formatting import describe_message
 from ..config import SYSTEM_PROMPT, ALLOWED_MODELS, DEFAULT_MODEL
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 # Create logger
 logger = logging.getLogger(__name__)
+
+
+def _replied_to(message):
+    """The message this one replies to, when Discord already resolved it."""
+    resolved = getattr(getattr(message, "reference", None), "resolved", None)
+    return resolved if isinstance(resolved, discord.Message) else None
 
 class ThreadCommands(commands.Cog):
     """Commands for managing AI conversation threads."""
@@ -495,7 +501,7 @@ class ThreadCommands(commands.Cog):
                 "name": message.author.display_name,
                 "user_id": str(message.author.id),
                 "is_bot": message.author.bot,
-                "content": resolve_discord_mentions(message),
+                "content": describe_message(message, _replied_to(message)),
             })
 
             # Other bots and webhooks are kept as context but never answered,
@@ -507,7 +513,7 @@ class ThreadCommands(commands.Cog):
                 await self.service.respond(ReplyRequest(
                     conversation=conversation,
                     author=message.author,
-                    content=resolve_discord_mentions(message),
+                    content=describe_message(message, _replied_to(message)),
                     message=message,
                     attachments=list(message.attachments or []),
                     history_until=recorded_at,

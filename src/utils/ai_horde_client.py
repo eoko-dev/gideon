@@ -2,6 +2,8 @@ import aiohttp
 from .http_session import SharedSessionMixin
 import asyncio
 import logging
+
+from .llm_formatting import flatten_system_prompt
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger('ai_horde_client')
@@ -192,7 +194,7 @@ class AIHordeClient(SharedSessionMixin):
         if system_prompt:
             # AI Horde uses ### Instruction / ### Input / ### Response format for some models
             # We'll prepend the system prompt simply for now.
-            horde_prompt += f"System: {system_prompt}\n\n"
+            horde_prompt += f"System: {flatten_system_prompt(system_prompt)}\n\n"
 
         for msg in messages:
             role = msg.get("role", "user").capitalize()

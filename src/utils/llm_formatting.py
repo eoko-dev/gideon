@@ -16,6 +16,28 @@ logger = logging.getLogger(__name__)
 # message (timestamps, user ids, names) is bookkeeping and must not be sent.
 _PASSTHROUGH_KEYS = ("tool_calls", "tool_call_id")
 
+# Separates the stable part of a system prompt (identity, framing, channel
+# summaries) from the part that changes every message (date/time, memory
+# search hits, people notes). Clients turn it into a prompt-cache breakpoint
+# where the provider supports one, and strip it otherwise.
+PROMPT_CACHE_BREAK = "\n\n<<gideon-cache-break>>\n\n"
+
+
+def split_system_prompt(prompt: Optional[str]):
+    """Returns (stable, volatile) halves of a system prompt; volatile may be ''."""
+    if not prompt:
+        return prompt or "", ""
+    stable, _, volatile = prompt.partition(PROMPT_CACHE_BREAK)
+    return stable, volatile
+
+
+def flatten_system_prompt(prompt: Optional[str]) -> Optional[str]:
+    """The system prompt as plain text, without the cache marker."""
+    if not prompt:
+        return prompt
+    return prompt.replace(PROMPT_CACHE_BREAK, "\n\n")
+
+
 _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 _ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 _CHANNEL_MENTION_RE = re.compile(r"<#(\d+)>")
@@ -102,6 +124,59 @@ def resolve_discord_mentions(message) -> str:
     content = _ROLE_MENTION_RE.sub(replace_role, content)
     content = _CHANNEL_MENTION_RE.sub(replace_channel, content)
     return content
+
+
+def _snippet(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _attachment_summary(message) -> str:
+    names = [getattr(a, "filename", "file") for a in (getattr(message, "attachments", None) or [])]
+    return f"[attachments: {', '.join(names)}]" if names else ""
+
+
+def describe_message(message, referenced=None, quote_limit: int = 200) -> str:
+    """The text Gideon stores and reads for a Discord message.
+
+    Beyond the readable content: what it replies to, forwarded messages,
+    attachment names, embeds and stickers — so "explain this" on a reply, a
+    forwarded post or an image-only message still makes sense to the model.
+    Returns "" only when there is truly nothing to describe.
+    """
+    parts = []
+    if referenced is not None:
+        author = getattr(referenced, "author", None)
+        name = getattr(author, "display_name", None) or getattr(author, "name", None) or "someone"
+        quoted = resolve_discord_mentions(referenced) or _attachment_summary(referenced)
+        if quoted:
+            parts.append(f'(replying to {name}: "{_snippet(quoted, quote_limit)}")')
+        else:
+            parts.append(f"(replying to a message from {name})")
+
+    text = resolve_discord_mentions(message)
+    if text:
+        parts.append(text)
+
+    for snapshot in getattr(message, "snapshots", None) or []:
+        forwarded = getattr(snapshot, "content", None) or getattr(getattr(snapshot, "message", None), "content", "")
+        if forwarded:
+            parts.append(f'(forwarded message: "{_snippet(forwarded, 500)}")')
+
+    attachments = _attachment_summary(message)
+    if attachments:
+        parts.append(attachments)
+
+    for embed in (getattr(message, "embeds", None) or [])[:2]:
+        title = getattr(embed, "title", None) or ""
+        description = getattr(embed, "description", None) or ""
+        if title or description:
+            parts.append(f"[embed: {_snippet(' — '.join(p for p in (title, description) if p), 300)}]")
+
+    for sticker in getattr(message, "stickers", None) or []:
+        parts.append(f"[sticker: {getattr(sticker, 'name', 'sticker')}]")
+
+    return "\n".join(parts)
 
 
 def collect_mention_targets(history: List[Dict[str, Any]], users=()) -> Dict[str, str]:

@@ -14,7 +14,7 @@ from ..utils.llm_result import call_chat
 from ..utils.memory_service import check_and_rotate_session, llm_clients, schedule_compaction
 from ..utils.timeutil import to_epoch
 from ..utils.web_search import SEARCHING_STATUS, build_search_system_prompt
-from ..utils.llm_formatting import resolve_discord_mentions
+from ..utils.llm_formatting import describe_message, resolve_discord_mentions
 from ..config import DEFAULT_MODEL
 
 logger = logging.getLogger('mention_commands')
@@ -53,8 +53,9 @@ class MentionCommands(commands.Cog):
         return content.strip()
 
     def _history_for(self, message: discord.Message, channel_id: str) -> List[Dict[str, Any]]:
-        """Channel history as of the message being answered."""
-        return self.state.get_channel_history(channel_id, until=self._history_anchors.get(message.id))
+        """Conversation history (channel or thread) as of the message being answered."""
+        return self.service.history(self._conversation(message, channel_id),
+                                    until=self._history_anchors.get(message.id))
 
     async def _send_reply(self, message: discord.Message, channel_id: str,
                           text: str, history: List[Dict[str, Any]]):
@@ -63,6 +64,10 @@ class MentionCommands(commands.Cog):
                                 [message.author, *message.mentions])
 
     def _conversation(self, message: discord.Message, channel_id: str) -> Conversation:
+        """The conversation a message belongs to (a thread keeps its own history)."""
+        if isinstance(message.channel, discord.Thread):
+            return Conversation(channel=message.channel, channel_id=str(message.channel.parent_id),
+                                thread_id=str(message.channel.id))
         return Conversation(channel=message.channel, channel_id=channel_id)
 
     # ─── History recording guard ────────────────────────────────────────────
@@ -87,6 +92,8 @@ class MentionCommands(commands.Cog):
         try:
             db = self.state.db_manager
             active.update(db.messages.get_distinct_channel_ids())
+            # User threads and forum posts Gideon has joined
+            active.update(db.messages.get_distinct_untracked_thread_ids())
             active.update(db.get_all_configured_channel_ids())
             for persona in db.get_all_channel_personas():
                 if persona.get('channel_id'):
@@ -132,11 +139,7 @@ class MentionCommands(commands.Cog):
 
             full_response = f"{prefix}{result.text}"
 
-            await self.state.add_to_channel_history(channel_id, {
-                "role": "assistant",
-                "content": full_response,
-                "timestamp": datetime.now()
-            })
+            await self.service.record(conversation, {"role": "assistant", "content": full_response})
 
             await self._send_reply(message, channel_id, full_response, conversation_context)
 
@@ -644,11 +647,12 @@ class MentionCommands(commands.Cog):
 
     # ─── Message listener ───────────────────────────────────────────────────
 
-    def _is_bot_mentioned(self, message: discord.Message) -> bool:
+    def _is_bot_mentioned(self, message: discord.Message, channel_id: Optional[str] = None) -> bool:
         """Checks @everyone/@here, user mentions, raw content, and same-named role mentions."""
         # Gideon is part of everyone. Discord only sets this when the author
-        # was allowed to ping everyone, so typed-but-inert "@everyone" is ignored.
-        if message.mention_everyone:
+        # was allowed to ping everyone, so typed-but-inert "@everyone" is
+        # ignored. Admins can switch this off globally or per channel.
+        if message.mention_everyone and self._responds_to_everyone(channel_id or str(message.channel.id)):
             return True
 
         for mention in message.mentions:
@@ -668,6 +672,16 @@ class MentionCommands(commands.Cog):
 
         return False
 
+    def _responds_to_everyone(self, channel_id: str) -> bool:
+        getter = getattr(self.state, "get_effective_respond_to_everyone", None)
+        if getter is None:
+            return True
+        try:
+            return bool(getter(channel_id))
+        except Exception as e:
+            logger.error(f"[Mention] Could not read respond_to_everyone for {channel_id}: {e}")
+            return True
+
     def _is_own_persona_webhook(self, message: discord.Message, channel_id: str) -> bool:
         """True if this message is one the bot sent through its persona webhook.
 
@@ -686,52 +700,109 @@ class MentionCommands(commands.Cog):
 
         return bool(persona) and str(message.webhook_id) == str(persona.get('webhook_id') or '')
 
+    def _is_gideon_message(self, message, channel_id: str) -> bool:
+        """True for a message Gideon wrote (bot account or its persona webhook)."""
+        author = getattr(message, "author", None)
+        if author is not None and getattr(author, "id", None) == self.bot.user.id:
+            return True
+        return bool(getattr(message, "webhook_id", None)) and self._is_own_persona_webhook(message, channel_id)
+
+    async def _referenced_message(self, message, fetch: bool):
+        """The message this one replies to, if any (fetched only when ``fetch``)."""
+        reference = getattr(message, "reference", None)
+        if reference is None or getattr(reference, "message_id", None) is None:
+            return None
+        # Forwards carry their content in message.snapshots instead
+        if "forward" in str(getattr(reference, "type", "")).lower():
+            return None
+        resolved = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
+        if isinstance(resolved, discord.DeletedReferencedMessage):
+            return None
+        if resolved is None and fetch:
+            try:
+                resolved = await message.channel.fetch_message(reference.message_id)
+            except (discord.HTTPException, AttributeError):
+                return None
+        return resolved
+
+    def _thread_is_managed(self, thread) -> bool:
+        """AI threads (and trivia threads) are answered by their own cogs."""
+        thread_id = str(thread.id)
+        try:
+            if self.state.get_discord_thread(thread_id):
+                return True
+            if self.state.get_active_trivia_session(thread_id):
+                return True
+        except Exception as e:
+            logger.error(f"[Mention] Could not check thread {thread_id}: {e}")
+            return True
+        return getattr(thread, "owner_id", None) == self.bot.user.id
+
     @commands.Cog.listener()
     async def on_message(self, message):
-        """Listen for messages in channels and respond to @mentions."""
+        """Records conversation in active channels/threads and answers when addressed."""
         # Ignore messages from the bot itself
         if message.author == self.bot.user:
             return
 
-        # Ignore messages in threads as they're handled by ThreadCommands
+        # User-created threads and forum posts are handled here (on mention,
+        # in the thread's own history); AI threads belong to ThreadCommands
+        thread_id = None
         if isinstance(message.channel, discord.Thread):
-            return
-
-        channel_id = str(message.channel.id)
+            if self._thread_is_managed(message.channel):
+                return
+            thread_id = str(message.channel.id)
+            channel_id = str(message.channel.parent_id)
+        else:
+            channel_id = str(message.channel.id)
 
         # Persona replies go out through a webhook, so they aren't authored by
         # bot.user and would otherwise be recorded as if a human had said them
         if self._is_own_persona_webhook(message, channel_id):
             return
 
-        is_mentioned = self._is_bot_mentioned(message)
+        is_mentioned = self._is_bot_mentioned(message, channel_id)
+        referenced = await self._referenced_message(message, fetch=is_mentioned)
+        # Replying to Gideon addresses it, even with the reply ping turned off
+        if not is_mentioned and referenced is not None and self._is_gideon_message(referenced, channel_id):
+            is_mentioned = True
+
+        conversation = Conversation(channel=message.channel, channel_id=channel_id, thread_id=thread_id)
         recorded = False
+        recorded_at = None
 
-        # Only record history for channels the bot participates in
-        if self.state and self._should_record(channel_id, is_mentioned):
-            # Check for session expiry and rotate before recording the new message
-            try:
-                await check_and_rotate_session(channel_id, self.state, self.clients)
-            except Exception as e:
-                logger.error(f"[Mention] Error during session rotation for channel {channel_id}: {e}", exc_info=True)
+        # Only record history for channels (and threads) the bot participates in
+        if self.state and self._should_record(thread_id or channel_id, is_mentioned):
+            entry = {
+                "role": "user",
+                "name": message.author.display_name,
+                "user_id": str(message.author.id),
+                "is_bot": message.author.bot,
+                "content": describe_message(message, referenced),
+            }
+            if thread_id:
+                try:
+                    recorded_at = await self.service.record(conversation, entry)
+                except Exception as e:
+                    logger.error(f"[Mention] Error adding message to thread {thread_id}: {e}", exc_info=True)
+            else:
+                # Check for session expiry and rotate before recording the new message
+                try:
+                    await check_and_rotate_session(channel_id, self.state, self.clients)
+                except Exception as e:
+                    logger.error(f"[Mention] Error during session rotation for channel {channel_id}: {e}", exc_info=True)
 
-            try:
-                recorded_at = await self.state.add_to_channel_history(channel_id, {
-                    "role": "user",
-                    "name": message.author.display_name,
-                    "user_id": str(message.author.id),
-                    "is_bot": message.author.bot,
-                    "content": resolve_discord_mentions(message),
-                    "timestamp": datetime.now()
-                })
-                recorded = recorded_at is not None
-            except Exception as e:
-                logger.error(f"[Mention] Error adding message to history for channel {channel_id}: {e}", exc_info=True)
+                try:
+                    recorded_at = await self.state.add_to_channel_history(
+                        channel_id, {**entry, "timestamp": datetime.now()})
+                except Exception as e:
+                    logger.error(f"[Mention] Error adding message to history for channel {channel_id}: {e}", exc_info=True)
 
-            # Compact oversized histories into a memory summary so long-running
-            # sessions don't silently lose context off the end of the window.
-            # Runs in the background so the summarization call never delays a reply.
-            schedule_compaction(channel_id, self.state, self.clients)
+                # Compact oversized histories into a memory summary so long-running
+                # sessions don't silently lose context off the end of the window.
+                # Runs in the background so the summarization call never delays a reply.
+                schedule_compaction(channel_id, self.state, self.clients)
+            recorded = recorded_at is not None
 
         # Other bots and webhooks are kept as context but never answered,
         # so two bots can't trigger each other in an endless loop
@@ -741,11 +812,12 @@ class MentionCommands(commands.Cog):
         if recorded:
             self._history_anchors[message.id] = recorded_at
         try:
-            await self._respond_to_mention(message, channel_id, recorded)
+            await self._respond_to_mention(message, conversation, recorded, referenced)
         finally:
             self._history_anchors.pop(message.id, None)
 
-    async def _respond_to_mention(self, message: discord.Message, channel_id: str, recorded: bool):
+    async def _respond_to_mention(self, message: discord.Message, conversation: Conversation,
+                                  recorded: bool, referenced=None):
         """Generates and sends the reply to a message that mentioned the bot."""
         # Ensure state manager is available before proceeding
         if not self.state:
@@ -753,8 +825,10 @@ class MentionCommands(commands.Cog):
             await message.channel.send("⚠️ Internal error: State manager not available.")
             return
 
-        logger.info(f"[Mention] Detected mention from {message.author.id} in channel {channel_id}")
+        logger.info(f"[Mention] Detected mention from {message.author.id} in "
+                    f"{conversation.thread_id or conversation.channel_id}")
 
+        content = self._strip_mentions(describe_message(message, referenced)) or "Hello!"
         try:
             # Mentions are recorded in on_message, so history already ends
             # with this turn. Anchoring matters: without it, messages from
@@ -762,9 +836,9 @@ class MentionCommands(commands.Cog):
             # after the mention, and the model answers them instead of the
             # person who summoned it.
             await self.service.respond(ReplyRequest(
-                conversation=self._conversation(message, channel_id),
+                conversation=conversation,
                 author=message.author,
-                content=self._strip_mentions(message.content) or "Hello!",
+                content=content,
                 message=message,
                 attachments=list(message.attachments or []),
                 history_until=self._history_anchors.get(message.id),
@@ -772,11 +846,11 @@ class MentionCommands(commands.Cog):
                 feature="mention",
             ))
         except Exception as e:
-            logger.exception(f"[Mention] Error processing mention in channel {channel_id}: {e}")
+            logger.exception(f"[Mention] Error processing mention in {conversation.channel_id}: {e}")
             try:
                 await message.channel.send("⚠️ Something went wrong while I was answering. Please try again.")
             except Exception as followup_e:
-                logger.error(f"[Mention] Failed to send error message to channel {channel_id}: {followup_e}")
+                logger.error(f"[Mention] Failed to send error message: {followup_e}")
 
 
 def setup(bot):

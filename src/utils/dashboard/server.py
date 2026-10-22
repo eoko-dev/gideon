@@ -55,15 +55,17 @@ SETTINGS_INT_RANGES = {
 }
 # Daily per-user LLM spend cap in USD (0 = unlimited)
 COST_BUDGET_RANGE = (0.0, 1000.0)
-SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled')
+SETTINGS_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'tool_calling_enabled',
+                        'respond_to_everyone')
 CHANNEL_MEMORY_RANGES = {
     'session_timeout_hours': (1, 168),
     'max_memory_summaries': (1, 50),
 }
-CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled')
+CHANNEL_MEMORY_BOOL_FIELDS = ('memory_summary_enabled', 'user_memory_enabled', 'respond_to_everyone')
 CHANNEL_OVERRIDE_FIELDS = (
     'model', 'provider', 'system_prompt',
     'session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries', 'user_memory_enabled',
+    'respond_to_everyone',
 )
 
 
@@ -538,6 +540,7 @@ class DashboardServer:
             'user_memory_enabled': state.get_user_memory_enabled(),
             'tool_calling_enabled': state.get_tool_calling_enabled(),
             'tool_calling_max_iterations': state.get_tool_calling_max_iterations(),
+            'respond_to_everyone': state.get_respond_to_everyone(),
             'utility_model': state.get_utility_model(),
             'daily_user_cost_budget': state.get_daily_user_cost_budget(),
             'daily_user_image_limit': state.get_daily_user_image_limit(),
@@ -621,6 +624,7 @@ class DashboardServer:
             'user_memory_enabled': state.set_user_memory_enabled,
             'tool_calling_enabled': state.set_tool_calling_enabled,
             'tool_calling_max_iterations': state.set_tool_calling_max_iterations,
+            'respond_to_everyone': state.set_respond_to_everyone,
             'utility_model': state.set_utility_model,
             'daily_user_cost_budget': state.set_daily_user_cost_budget,
             'daily_user_image_limit': state.set_daily_user_image_limit,
@@ -687,7 +691,8 @@ class DashboardServer:
         cursor = self.bot.state_manager.db_manager._get_cursor()
         cursor.execute(
             "SELECT channel_id, model, provider, system_prompt, session_timeout_hours, "
-            "memory_summary_enabled, max_memory_summaries, user_memory_enabled FROM CHANNEL_CONFIG"
+            "memory_summary_enabled, max_memory_summaries, user_memory_enabled, respond_to_everyone "
+            "FROM CHANNEL_CONFIG"
         )
         return {row['channel_id']: dict(row) for row in cursor.fetchall()}
 
@@ -740,7 +745,7 @@ class DashboardServer:
         memory_config = {
             name: state._get_channel_memory_config(channel_id, name)
             for name in ('session_timeout_hours', 'memory_summary_enabled', 'max_memory_summaries',
-                         'user_memory_enabled')
+                         'user_memory_enabled', 'respond_to_everyone')
         }
 
         raw_persona = state.get_channel_persona(channel_id)
@@ -775,6 +780,7 @@ class DashboardServer:
             'effective_memory_summary_enabled': state.get_effective_memory_summary_enabled(channel_id),
             'effective_max_memory_summaries': state.get_effective_max_memory_summaries(channel_id),
             'effective_user_memory_enabled': state.get_effective_user_memory_enabled(channel_id),
+            'effective_respond_to_everyone': state.get_effective_respond_to_everyone(channel_id),
             'persona': persona,
             'sources': sources,
         })

@@ -84,7 +84,7 @@ Environment-based configuration loading:
 - `get_active_provider()` - Returns current AI provider client
 - `get_effective_persona(channel_id)` - Returns active persona for a channel or None
 - `get_effective_model(channel_id)` - Returns model, respecting persona model overrides
-- `get_effective_system_prompt(channel_id, query, speaker_id, history, base_prompt)` - Returns resolved system prompt with the channel memory block appended and, when `speaker_id` is given, a `--- People in this channel ---` block (speaker's notes in full, short notes for other speakers in `history`). `base_prompt` replaces the persona/channel/global prompt (used for a thread's own prompt)
+- `get_effective_system_prompt(channel_id, query, speaker_id, history, base_prompt, location_id)` - Returns resolved system prompt. Stable part: base prompt, multi-user framing, recent channel summaries. Then `PROMPT_CACHE_BREAK` and the per-message part: a `--- Context ---` block (date/time, server, channel or thread `location_id`, topic, persona name), FTS-matched older summaries and, when `speaker_id` is given, a `--- People in this channel ---` block (speaker's notes in full, short notes for other speakers in `history`). `base_prompt` replaces the persona/channel/global prompt (used for a thread's own prompt)
 - `get_effective_session_timeout(channel_id)` - Returns session timeout hours (channel override → global)
 - `get_effective_memory_summary_enabled(channel_id)` - Returns bool (channel override → global)
 - `get_effective_max_memory_summaries(channel_id)` - Returns summary cap (channel override → global)
@@ -182,7 +182,11 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - Checks for active persona per channel and routes responses through `WebhookSender`
 
 3. **`mention_commands.py`** - Handles @mentions of the bot
-   - `@everyone` / `@here` count as mentioning Gideon (only when Discord actually pinged everyone, i.e. the author had permission)
+   - `@everyone` / `@here` count as mentioning Gideon (only when Discord actually pinged everyone, i.e. the author had permission) unless an admin turned that off: `respond_to_everyone` in `GLOBAL_CONFIG` (default True) with a per-channel override `CHANNEL_CONFIG.respond_to_everyone` (NULL = inherit; threads follow their parent), set from the dashboard Settings and channel editor
+   - Replying to one of Gideon's messages counts as addressing it, even with the reply ping off
+   - Also answers @mentions in user-created threads and forum posts (AI threads and trivia threads stay with their own cogs); those conversations keep their own thread history and share the parent channel's memory and settings
+   - Messages are stored via `llm_formatting.describe_message()`: readable mentions plus what they reply to, forwarded snapshots, attachment names, embeds and stickers
+   - Replies are Discord replies to the triggering message (bot account; persona webhooks can't reply)
    - Uses native LLM tool calling (when `TOOL_CALLING_ENABLED=TRUE`)
    - The primary model receives tool definitions and decides natively whether to call a tool (reminder, image generation, calculation, translation, etc.) or respond conversationally
    - Eliminates the need for a separate intent classification LLM call

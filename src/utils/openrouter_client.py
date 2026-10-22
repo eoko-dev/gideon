@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import List, Dict, Any, Optional
 
 from . import llm_result
-from .llm_formatting import prepare_llm_messages
+from .llm_formatting import flatten_system_prompt, prepare_llm_messages, split_system_prompt
 from .llm_result import ChatResult
 from .usage import record_usage
 
@@ -75,6 +75,22 @@ class OpenRouterClient:
             return "image" in modality_str.split("->")[0].lower()
 
         return None
+
+    @staticmethod
+    def _system_content(prompt: Optional[str], model_id: str):
+        """System message content, with a cache breakpoint for Anthropic models.
+
+        Anthropic only caches up to an explicit ``cache_control`` breakpoint,
+        so the stable prefix is sent as its own text part. Other providers
+        cache matching prefixes automatically and get plain text.
+        """
+        stable, volatile = split_system_prompt(prompt)
+        if not model_id.startswith("anthropic/") or not volatile:
+            return flatten_system_prompt(prompt) or ""
+        return [
+            {"type": "text", "text": stable, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": volatile},
+        ]
 
     def _normalize_model_id(self, model_name: Optional[str] = None) -> str:
         """Resolve a model name to the ID used by the OpenRouter API."""
@@ -189,7 +205,7 @@ class OpenRouterClient:
 
         logger.debug(f"Using model: {api_model_name}; system prompt length: {len(prompt_to_use or '')}")
 
-        conversation = [{"role": "system", "content": prompt_to_use}]
+        conversation = [{"role": "system", "content": self._system_content(prompt_to_use, api_model_name)}]
         # Label each user turn with its speaker and drop bookkeeping keys
         conversation.extend(prepare_llm_messages(messages))
 

@@ -417,6 +417,16 @@
                                         <small class="field-hint">Maximum round-trips between tool calls and the LLM before forcing a text response.</small>
                                     </div>
                                 </div>
+                                <div class="form-row">
+                                    <div class="field">
+                                        <label for="setting-respond-everyone">Answer @everyone / @here</label>
+                                        <select id="setting-respond-everyone">
+                                            <option value="true">Yes - a ping to everyone also pings Gideon</option>
+                                            <option value="false">No - only direct mentions and replies</option>
+                                        </select>
+                                        <small class="field-hint">Default for all channels. Each channel can override this in its settings.</small>
+                                    </div>
+                                </div>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save tool calling settings</button>
                                     <span id="tool-calling-save-status" class="save-status" role="status" aria-live="polite"></span>
@@ -1174,6 +1184,18 @@
                                     <option value="false">Disabled</option>
                                 </select>
                                 <small class="field-hint" id="channel-user-memory-hint"></small>
+                            </div>
+                            <div class="field">
+                                <div class="field-head">
+                                    <label for="channel-edit-everyone">Answer @everyone / @here</label>
+                                    <span class="chip chip-source" data-source-for="respond_to_everyone" hidden></span>
+                                </div>
+                                <select id="channel-edit-everyone">
+                                    <option value="">Inherit</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                </select>
+                                <small class="field-hint" id="channel-everyone-hint"></small>
                             </div>
                         </div>
                     </fieldset>

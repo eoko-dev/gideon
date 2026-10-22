@@ -135,6 +135,17 @@ class MessageManager:
             logger.error(f"Error getting distinct channel ids: {e}", exc_info=True)
             return []
 
+    def get_distinct_untracked_thread_ids(self) -> List[str]:
+        """Thread IDs with stored messages that aren't AI threads (user threads, forum posts)."""
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute("SELECT DISTINCT thread_id FROM MESSAGES WHERE thread_id IS NOT NULL "
+                           "AND thread_id NOT IN (SELECT thread_id FROM THREADS);")
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting untracked thread ids: {e}", exc_info=True)
+            return []
+
     def get_channel_ids_with_messages_before(self, cutoff_timestamp: datetime) -> List[str]:
         """Returns the IDs of channels that have messages older than the cutoff."""
         return self._ids_with_messages_before("channel_id", cutoff_timestamp)

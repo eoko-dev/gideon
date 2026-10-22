@@ -161,7 +161,7 @@ class FakeState:
         return ts
 
     def get_effective_system_prompt(self, channel_id, query=None, speaker_id=None, history=None,
-                                    base_prompt=None):
+                                    base_prompt=None, location_id=None):
         return base_prompt or "sys"
 
     def get_tool_calling_enabled(self):

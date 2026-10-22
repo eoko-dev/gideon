@@ -207,6 +207,8 @@ class ConversationService:
         base_prompt = self._thread_config(conversation).get("system_prompt")
         if base_prompt:
             kwargs["base_prompt"] = base_prompt
+        if conversation.is_thread:
+            kwargs["location_id"] = conversation.thread_id
         return self.state.get_effective_system_prompt(conversation.channel_id, **kwargs)
 
     # ─── Images ─────────────────────────────────────────────────────────────
@@ -321,16 +323,20 @@ class ConversationService:
 
     async def send(self, conversation: Conversation, text: str,
                    history: Optional[List[Dict[str, Any]]] = None,
-                   people: Optional[List[Any]] = None) -> List[Any]:
+                   people: Optional[List[Any]] = None,
+                   reply_to: Any = None) -> List[Any]:
         """Sends a reply in Discord-sized chunks, via the persona webhook when active.
 
         '@Name' written by the model becomes a real ping for known participants.
+        With ``reply_to`` (a discord.Message), the first chunk is a Discord
+        reply to it, so it's clear who Gideon is answering.
         """
         targets = collect_mention_targets(history or [], [p for p in (people or []) if p])
         sent = []
-        for chunk in chunk_message(apply_outbound_mentions(text, targets)):
+        for index, chunk in enumerate(chunk_message(apply_outbound_mentions(text, targets))):
+            kwargs = {"reference": reply_to} if index == 0 and reply_to is not None else {}
             sent.append(await self.bot.webhook_sender.send_response(
-                conversation.channel, chunk, conversation.channel_id))
+                conversation.channel, chunk, conversation.channel_id, **kwargs))
         return sent
 
     async def send_error(self, conversation: Conversation, result: ChatResult):
@@ -402,5 +408,10 @@ class ConversationService:
 
             await self.record(conversation, {"role": "assistant", "content": text})
             people = [request.author, *getattr(request.message, "mentions", []), *request.extra_people]
-            await self.send(conversation, text, history, people)
+            # Reply to the triggering message when it's a real one in this channel
+            reply_to = request.message if (
+                isinstance(request.message, discord.Message)
+                and getattr(request.message.channel, "id", None) == getattr(conversation.channel, "id", None)
+            ) else None
+            await self.send(conversation, text, history, people, reply_to=reply_to)
             return result

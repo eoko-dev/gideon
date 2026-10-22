@@ -5,7 +5,7 @@ from openai import AsyncOpenAI, OpenAIError
 from typing import Dict, Any, Optional, List # Added List import
 
 from . import llm_result
-from .llm_formatting import prepare_llm_messages
+from .llm_formatting import flatten_system_prompt, prepare_llm_messages
 from .llm_result import ChatResult
 from .usage import record_usage
 
@@ -182,7 +182,8 @@ class OpenAIClient:
 
         # Add system prompt if provided
         if system_prompt:
-            api_messages.append({"role": "system", "content": system_prompt})
+            # OpenAI caches matching prompt prefixes automatically
+            api_messages.append({"role": "system", "content": flatten_system_prompt(system_prompt)})
 
         # Process images if provided and model supports vision
         images_to_include = []
