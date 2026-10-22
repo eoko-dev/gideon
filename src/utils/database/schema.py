@@ -262,26 +262,70 @@ class SchemaManager:
 
                 logger.info("Database schema creation/verification complete.")
 
-                # Run migrations
-                SchemaManager._migrate_remove_news_feeds(cursor)
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "provider", "TEXT")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "session_timeout_hours", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "memory_summary_enabled", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "max_memory_summaries", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_MEMORY", "conversation_start", "DATETIME")
-                SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "user_name", "TEXT")
-                SchemaManager._add_column_if_not_exists(cursor, "MESSAGES", "is_bot", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "CHANNEL_CONFIG", "user_memory_enabled", "INTEGER")
-                SchemaManager._add_column_if_not_exists(cursor, "THREADS", "creator_id", "TEXT")
-                SchemaManager._create_memory_fts(cursor)
-
-                logger.info("Database schema migration checks complete.")
+            SchemaManager.migrate(conn)
         except sqlite3.Error as e:
             logger.error(f"Error initializing/migrating database schema: {e}", exc_info=True)
             raise
 
+    # ─── Versioned migrations ───────────────────────────────────────────────
+    #
+    # The database records the last migration it ran in PRAGMA user_version.
+    # Each migration runs once, in order, in its own transaction. To change
+    # the schema, append a new (version, function) pair — never edit or
+    # reorder an existing one. A restored backup from an older schema is
+    # brought forward the next time initialize()/migrate() runs.
+
     @staticmethod
-    def _create_memory_fts(cursor):
+    def _migration_1_baseline(cursor):
+        """Everything added before migrations were versioned (idempotent)."""
+        SchemaManager._migrate_remove_news_feeds(cursor)
+        for table, column, column_type in (
+            ("CHANNEL_CONFIG", "provider", "TEXT"),
+            ("CHANNEL_CONFIG", "session_timeout_hours", "INTEGER"),
+            ("CHANNEL_CONFIG", "memory_summary_enabled", "INTEGER"),
+            ("CHANNEL_CONFIG", "max_memory_summaries", "INTEGER"),
+            ("CHANNEL_MEMORY", "conversation_start", "DATETIME"),
+            ("MESSAGES", "user_name", "TEXT"),
+            ("MESSAGES", "is_bot", "INTEGER"),
+            ("CHANNEL_CONFIG", "user_memory_enabled", "INTEGER"),
+        ):
+            SchemaManager._add_column_if_not_exists(cursor, table, column, column_type)
+        SchemaManager._create_memory_fts(cursor, rebuild=True)
+
+    @staticmethod
+    def _migration_2_thread_creator(cursor):
+        SchemaManager._add_column_if_not_exists(cursor, "THREADS", "creator_id", "TEXT")
+        # Messages of threads deleted before deletes cleaned up after themselves
+        cursor.execute("DELETE FROM MESSAGES WHERE thread_id IS NOT NULL "
+                       "AND thread_id NOT IN (SELECT thread_id FROM THREADS);")
+
+    MIGRATIONS = (
+        (1, "_migration_1_baseline"),
+        (2, "_migration_2_thread_creator"),
+    )
+
+    @staticmethod
+    def schema_version() -> int:
+        return SchemaManager.MIGRATIONS[-1][0]
+
+    @staticmethod
+    def migrate(conn):
+        """Runs every migration newer than the database's user_version."""
+        current = conn.execute("PRAGMA user_version;").fetchone()[0]
+        # The FTS index is maintained by triggers; only make sure it exists
+        with conn:
+            SchemaManager._create_memory_fts(conn.cursor(), rebuild=False)
+        for version, name in SchemaManager.MIGRATIONS:
+            if version <= current:
+                continue
+            with conn:
+                getattr(SchemaManager, name)(conn.cursor())
+                # PRAGMA can't take parameters; version is a trusted int
+                conn.execute(f"PRAGMA user_version = {int(version)};")
+            logger.info(f"Database migrated to schema version {version} ({name}).")
+
+    @staticmethod
+    def _create_memory_fts(cursor, rebuild: bool = False):
         """Creates the FTS5 index over CHANNEL_MEMORY summaries (with sync triggers)."""
         try:
             cursor.execute("""
@@ -304,8 +348,9 @@ class SchemaManager:
                     INSERT INTO memory_fts(rowid, summary) VALUES (new.id, new.summary);
                 END;
             """)
-            # Index any summaries that predate the FTS table
-            cursor.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');")
+            if rebuild:
+                # Index any summaries that predate the FTS table
+                cursor.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');")
             logger.debug("memory_fts FTS5 index verified.")
         except sqlite3.Error as e:
             # FTS5 may be unavailable in exotic SQLite builds — memory search
@@ -326,7 +371,6 @@ class SchemaManager:
         for table in tables_to_drop:
             try:
                 cursor.execute(f"DROP TABLE IF EXISTS {table}")
-                logger.info(f"Migration: Dropped news feed table '{table}'")
             except sqlite3.Error as e:
                 logger.warning(f"Could not drop table '{table}': {e}")
 

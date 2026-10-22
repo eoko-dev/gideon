@@ -64,6 +64,15 @@ _channel_locks: Dict[str, asyncio.Lock] = {}
 _background_tasks: Set[asyncio.Task] = set()
 
 
+async def cancel_background_tasks():
+    """Cancels in-flight compactions (called on shutdown, before the DB closes)."""
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _channel_lock(channel_id: str) -> asyncio.Lock:
     return _channel_locks.setdefault(str(channel_id), asyncio.Lock())
 

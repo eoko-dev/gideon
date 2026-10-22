@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-Gideon is a sophisticated Discord bot that serves as an AI-powered assistant, providing intelligent conversations, image generation, video generation, trivia games, reminders, per-channel personas, and more. The bot integrates with multiple AI providers (OpenRouter, OpenAI, Anthropic Claude, Google Gemini), image generation services (AI Horde, Cloudflare Workers, DALL-E, ComfyUI, OpenRouter), and video generation via OpenRouter (Veo 3.1, Sora 2 Pro, Seedance, Wan, Kling, etc.).
+Gideon is a sophisticated Discord bot that serves as an AI-powered assistant, providing intelligent conversations, image generation, video generation, trivia games, reminders, per-channel personas, and more. The bot integrates with multiple AI providers (OpenRouter — which also reaches Anthropic Claude, Google Gemini and others — OpenAI, and AI Horde), image generation services (AI Horde, Cloudflare Workers, DALL-E, ComfyUI, OpenRouter), and video generation via OpenRouter (Veo 3.1, Sora 2 Pro, Seedance, Wan, Kling, etc.).
 
 **Tech Stack:**
-- Python 3.8+
+- Python 3.10+ (Docker image and CI use 3.12)
 - Discord.py (Py-cord 2.4+)
 - SQLite database
 - Multiple AI provider APIs
@@ -57,7 +57,7 @@ Environment-based configuration loading:
 - `SYSTEM_PROMPT` - Default AI personality
 - `DEFAULT_MODEL` - Initial model (format: `provider/model-name`)
 - `DATA_DIRECTORY` - Database and data storage location
-- `TOOL_CALLING_ENABLED` - Enable/disable native LLM tool calling for @mentions
+- `TOOL_CALLING_ENABLED` - Enable/disable native LLM tool calling (default TRUE; seeds the DB on first start, after which the dashboard/`/settings tools` value wins)
 - `TOOL_CALLING_MAX_ITERATIONS` - Max tool-call round-trips before forcing text response
 - `INTENT_DISCOVERY` - (Deprecated) Backward compat alias for `TOOL_CALLING_ENABLED`
 - `INTENT_DETECTION_MODEL` - (Deprecated) No longer used by tool-calling system
@@ -104,12 +104,26 @@ Environment-based configuration loading:
 - `max_memory_summaries` (int, default 10) — Maximum number of memory summaries retained per channel
 - `user_memory_enabled` (bool, default True) — Whether per-user notes are kept (per-channel override in `CHANNEL_CONFIG.user_memory_enabled`)
 
+**Cost Config Keys** (`GLOBAL_CONFIG` table):
+- `utility_model` (string, default unset) — `provider/model` for background work (memory summaries, people notes, reminder time parsing); unset means the channel's own model
+- `daily_user_cost_budget` (float USD, default 0 = unlimited) — Per-user daily LLM spend cap, resets at local midnight
+- `daily_user_image_limit` (int, default 25) / `daily_user_video_limit` (int, default 3) — Per-user daily generation caps (0 = unlimited)
+
 #### 4. Provider Management (`src/utils/model_manager.py`)
-`ProviderManager` handles multiple AI providers:
-- Routes requests to appropriate provider (OpenRouter, OpenAI, AI Horde)
-- Manages provider switching via `set_provider()`
-- Handles fallback logic if a provider fails
-- Validates model availability per provider
+`ProviderManager` lists and caches each provider's models and validates model IDs (`parse_model_id`, `get_models`). It does not route requests or fall back between providers — `ConversationService.resolve()` picks the client for a conversation.
+
+#### 5. Reply Pipeline (`src/utils/conversation_service.py`)
+`ConversationService` (on `bot.conversation_service`) is the single path for answering a turn, shared by @mentions, `/chat`, `/thread new|message` and the thread auto-reply:
+- `Conversation(channel, channel_id, thread_id=None)` — where history lives (`channel_id` is always the config/persona/memory scope; for threads it's the parent)
+- `ReplyRequest(conversation, author, content, message, attachments, history_until, recorded, feature)` — one turn; `message` is the `discord.Message` (or a `MessageLike` built from a slash-command ctx) tool handlers post through
+- `respond(request)` resolves provider/model/client (persona > thread > channel > global, always passing `model=` explicitly — never mutate a shared `client.model`), checks the user's daily budget, loads anchored history, builds the system prompt, collects images, runs the tool loop (or a plain call), records and sends the reply via the persona webhook when active
+- `record_user_turn()` records a human turn with session rotation and compaction for channels
+
+#### 6. LLM Results & Usage (`src/utils/llm_result.py`, `src/utils/usage.py`, `src/utils/budget.py`)
+- Clients expose `chat(...) -> ChatResult` (`content`, `tool_calls`, `usage`, user-facing `error`, `error_kind`, raw `detail` for logs only). `send_message_with_history()` keeps its legacy str/dict/"⚠️ ..." shape for older callers; `call_chat(client, ...)` adapts any client to `ChatResult`
+- OpenRouter retries rate limits, timeouts, network errors and 5xx with jittered backoff (honours `Retry-After`); the OpenAI SDK does its own retries
+- Wrap work in `usage_scope(feature, user_id=..., channel_id=...)`; clients call `record_usage(result)` and the sink registered at startup writes a `USAGE` row. Background memory work clears the user (`user_id=None`)
+- `budget.chat_budget_error()` / `generation_limit_error()` / `record_generation()` enforce per-user daily limits (admins and the owner are exempt)
 
 ### Database Layer (`src/utils/database/`)
 
@@ -134,6 +148,10 @@ Core tables:
 - `CHANNEL_MEMORY` - Long-term per-channel memory summaries (channel_id, summary, message_count, conversation_start, created_at); not pruned by the time-window prune — persists until `max_memory_summaries` cap or manual deletion
 - `CHANNEL_USER_MEMORY` - Per-user notes scoped to one channel; `PRIMARY KEY (channel_id, user_id)` (notes as a bullet list, display_name, message_count, created_at, updated_at). A user's notes in one channel are never read for another. Excluded from config JSON exports
 - `MESSAGES.is_bot` - Set for messages from bots/webhooks, which never get per-user notes
+- `THREADS.creator_id` - User who ran `/thread new` (may manage the thread without Manage Threads)
+- `USAGE` - One row per LLM call (tokens, cached tokens, cost) or image/video job (`units=1`), with feature, user, channel, provider, model
+
+**Migrations** are versioned with `PRAGMA user_version` (`SchemaManager.MIGRATIONS`); each runs once, in order. Foreign keys are declared but not enforced, so deletes clean up child rows explicitly (e.g. `delete_thread` removes the thread's messages). The connection is wrapped in `LockedConnection` so bot and dashboard threads never interleave transactions.
 
 #### Database Managers
 - `core.py` - `DatabaseManager` orchestrator; delegates to all sub-managers
@@ -148,6 +166,7 @@ Core tables:
 - `persona_manager.py` - Persona template and channel persona CRUD
 - `backup_manager.py` - Config JSON export/import/validation and SQLite backup/restore
 - `memory_manager.py` - Long-term channel memory CRUD (`get_memories`, `add_memory`, `delete_memories`, `prune_memories`, `get_all_memory_stats`)
+- `usage_manager.py` - Usage rows and summaries (`db.usage`)
 - `user_memory_manager.py` - Per-user, per-channel notes (`db.user_memory`). Every read/write requires both `channel_id` and `user_id` (raises `ValueError` otherwise); only deletes take a bare `user_id`
 
 ### Command Modules (`src/cogs/`)
@@ -155,7 +174,7 @@ Core tables:
 Each cog is a self-contained feature module loaded dynamically at startup:
 
 1. **`admin_commands.py`** - Admin/owner-only tools
-   - `/admin sync`, `/admin debug`, `/admin state`, `/admin diagnostic`, `/admin vision_models`
+   - `/admin sync`, `/admin debug`, `/admin state`, `/admin diagnostic` (connectivity, DNS, models), `/admin vision_models`, `/admin prune`
 
 2. **`chat_commands.py`** - Core AI conversation features
    - `/chat`, `/reset`, `/summarize`
@@ -201,7 +220,7 @@ Each cog is a self-contained feature module loaded dynamically at startup:
    - Persists results as `[video:url]` markers in message history for dashboard playback
 
 10. **`reminder_commands.py`** - Scheduled notifications
-   - `/remind`, `/reminders`, `/reminder_cancel`
+   - `/remind`, `/listreminders`, `/cancelreminder`
    - Background task checks for due reminders every 60s
 
 11. **`dashboard_commands.py`** - Web admin dashboard management
@@ -210,16 +229,16 @@ Each cog is a self-contained feature module loaded dynamically at startup:
 12. **`persona_commands.py`** - Per-channel persona management (Admin)
     - `/persona set` - Set custom persona (display_name, avatar_url, system_prompt, model_override)
     - `/persona template` - Apply a built-in or custom template to this channel
-    - `/persona view` - View current channel persona
+    - `/persona show` - View current channel persona
     - `/persona list` - List all channels with configured personas
     - `/persona templates` - Browse all available templates
     - `/persona toggle` - Enable or disable persona without removing it
     - `/persona remove` - Remove persona from channel
     - `/persona preview` - Send a test webhook message with current persona
 
-13. **`url_commands.py`** - URL summarization (`/summarizeurl`)
+13. **`url_commands.py`** - URL summarization (`/summarize_url`, fetched through `safe_fetch`)
 
-14. **`help_commands.py`** - Interactive `/help` command with category navigation
+14. **`help_commands.py`** - Interactive `/help`, built from `bot.application_commands` so it always matches the registered commands
 
 ### Persona System
 
@@ -240,21 +259,12 @@ Manages the full webhook lifecycle for persona delivery:
 
 #### Persona Templates (`src/utils/persona_templates.py`)
 Defines built-in templates seeded on startup:
-- `helpful-assistant` — Helpful Assistant
-- `tech-guru` — Tech Guru
-- `creative-writer` — Creative Writer
+- Helpful Assistant, Tech Guru, Creative Writer, Study Buddy, Concise Responder
 
 Built-in templates cannot be deleted. Custom templates can be freely created and removed.
 
 #### Chat Integration
-Both `chat_commands.py` and `thread_commands.py` check for active personas before sending responses:
-```python
-persona = self.bot.state_manager.get_effective_persona(channel_id)
-if persona:
-    await self.bot.webhook_sender.send_response(channel, content, channel_id)
-else:
-    await ctx.respond(content)
-```
+Replies go out through `ConversationService.send()`, which calls `bot.webhook_sender.send_response(channel, chunk, channel_id)` — the persona webhook when one is active, the bot account otherwise. New reply paths should build a `ReplyRequest` rather than sending themselves.
 
 ### Backup & Restore System
 
@@ -298,6 +308,9 @@ aiohttp web server running in the same event loop as the bot:
 - `POST /api/backup/database/validate` — Validate SQLite backup file
 - `POST /api/backup/database/restore` — Restore from SQLite backup
 
+**Usage API Endpoint:**
+- `GET /api/usage?days=7` — Totals (calls, tokens, cached tokens, cost, generation units) and breakdowns by day, feature, model and user (1–90 days). The settings endpoints also carry `utility_model`, `daily_user_cost_budget`, `daily_user_image_limit`, `daily_user_video_limit`
+
 **Video Generation API Endpoints:**
 - `GET /api/video/settings` — Active provider, default config (model, duration, aspect_ratio, resolution, audio), availability flag
 - `PUT /api/video/settings` — Update active provider and/or default config
@@ -332,6 +345,8 @@ The `GET/PUT /api/settings` and `GET/PUT /api/channels/{id}` endpoints also incl
 
 #### Frontend (`src/dashboard/`)
 Single-page application with tab-based navigation:
+- **Overview tab** — Bot status, provider/key health, recent errors, and a Usage card (cost, tokens, cached tokens, generations; by feature, model and person; today / 7 / 30 days)
+- **Settings tab** — Global model/prompt, memory, tool calling, and Cost controls (utility model, per-user daily chat budget, image and video limits)
 - **Memory tab** — Overview table of all channels with memories (summaries and people counts); channel detail card showing summaries with `conversation_start` dates and message counts, plus a "People in this channel" list where each user's notes can be edited or deleted; Clear, Clear people notes and Trigger Summarize actions per channel
 - **Personas tab** — Template card grid, channel personas table, modal editor for create/edit
 - **Video Gen tab** — Backend status, model picker with capability hints (resolutions, aspect ratios, durations, audio, image-to-video), defaults form, and a test-generation card that submits a job, polls every 5s, and embeds the resulting `<video>` inline
@@ -401,10 +416,10 @@ Built-in templates are defined in `src/utils/persona_templates.py` and seeded on
 
 ## Error Handling and Logging
 
-Three-layer error handling strategy:
+Error handling:
 1. **Command-level**: `try/except` blocks in individual command functions catch specific exceptions and return user-friendly messages
-2. **Cog-level**: `@commands.Cog.listener("on_application_command_error")` handlers catch errors from commands within that cog
-3. **Global**: `@bot.event` error handler in `bot.py` catches any unhandled exceptions, preventing crashes
+2. **Global**: `on_application_command_error` in `bot.py` answers every failed slash command with a short ephemeral message (permission, cooldown, missing Discord permission, or a generic error) and logs the traceback — raw exception text is never shown to users
+3. **LLM errors** travel as `ChatResult.error` (friendly text) with the provider's raw response only in `detail`/logs, and are never stored in history
 
 Logging uses Python's standard `logging` module:
 - Each module uses `logging.getLogger(__name__)` for its own logger
@@ -476,11 +491,11 @@ Gideon keeps short notes about each person, unique to each channel (a thread sha
 3. **Injection** — every reply path (mentions, `/chat`, `/search`, web search tool, threads) passes `speaker_id` and the visible `history` to `get_effective_system_prompt()`, which appends the speaker's notes plus up to 4 bullets for up to 4 other recent human speakers
 4. **User controls** — `/memory me|forget|optout|optin`, the `remember_about_me` / `forget_about_me` tools, and the dashboard's People list
 
-### Native Tool Calling (@mentions)
-When `TOOL_CALLING_ENABLED=TRUE` (or legacy `INTENT_DISCOVERY=TRUE`):
-1. User @mentions bot: "@Gideon remind me in 2 hours to check logs"
-2. `mention_commands.py` sends the message to the **primary LLM model** with tool definitions attached
-3. The model decides natively whether to call a tool (`set_reminder`, `generate_image`, `web_search`, `calculate`, `translate`, `define`, `create_poll`, `convert_timezone`, `convert_units`, `roll_dice`, `schedule_event`, `remember_about_me`, `forget_about_me`) or respond conversationally
+### Native Tool Calling (@mentions, /chat, threads)
+When tool calling is enabled (the default; legacy `INTENT_DISCOVERY=TRUE` also enables it):
+1. User @mentions bot: "@Gideon remind me in 2 hours to check logs" (or uses `/chat`, or writes in an AI thread)
+2. `ConversationService` sends the message to the **primary LLM model** with tool definitions attached
+3. The model decides natively whether to call a tool (`set_reminder`, `generate_image`, `web_search`, `calculate`, `create_poll`, `convert_timezone`, `roll_dice`, `schedule_event`, `remember_about_me`, `forget_about_me`) or respond conversationally. Translation, definitions and unit conversion are answered by the model directly (they used to be tools that only made a second LLM call)
 4. If the model requests tool calls, each tool is executed via `tool_registry.execute_tool()` and results are fed back to the model
 5. The model generates a final text response incorporating the tool results
 6. If tool calling is disabled, falls back to plain conversation (no tools)
@@ -489,7 +504,7 @@ When `TOOL_CALLING_ENABLED=TRUE` (or legacy `INTENT_DISCOVERY=TRUE`):
 - Single LLM call instead of two (classification + response)
 - No 320-line classification prompt — tool descriptions are compact
 - No confidence threshold heuristic — the model decides natively
-- Supports multi-tool requests (e.g., "calculate 15% of 250 and translate the result to French")
+- Supports multi-tool requests (e.g., "calculate 15% of 250 and remind me about it at 5pm")
 - Uses conversation context (the model sees chat history, so "translate that" works)
 
 **Tool definitions** are managed in `src/utils/tool_registry.py`. To add a new tool:
@@ -524,7 +539,7 @@ When `TOOL_CALLING_ENABLED=TRUE` (or legacy `INTENT_DISCOVERY=TRUE`):
 ## Troubleshooting
 
 - **Bot Offline** - Check process/container is running, verify `DISCORD_TOKEN`, check console logs
-- **Personas Not Showing** - Ensure bot has `Manage Webhooks` permission in the channel; check logs for webhook creation errors; verify persona is active with `/persona view`
+- **Personas Not Showing** - Ensure bot has `Manage Webhooks` permission in the channel; check logs for webhook creation errors; verify persona is active with `/persona show`
 - **Webhook Fallback Happening** - Check `discord.Forbidden` errors in logs; grant `Manage Webhooks` permission
 - **Restore Not Taking Effect** - Confirm `reinitialize_state()` completed without error; restart bot if state appears stale
 - **Database Locked** - Ensure only one bot instance is running; check file permissions on `DATA_DIRECTORY`
@@ -548,6 +563,14 @@ cp .env.example .env
 python3 -m src
 ```
 
+### Tests & CI
+```bash
+pip install -r requirements-dev.txt
+ruff check src tests
+python -m unittest discover -s tests
+```
+`.github/workflows/ci.yml` runs both on Python 3.12 for every push to `Production` and every PR. Ruff only enforces runtime-breaking rules (`pyproject.toml`); tests mock Discord and the LLM clients (see `tests/test_conversation_service.py` and `tests/dashboard_support.py`).
+
 ## Docker Deployment
 
 ```bash
@@ -565,7 +588,7 @@ docker-compose down
 
 - Follow existing code style (4-space indentation, descriptive variable names)
 - Add docstrings to new functions/classes
-- Update this CLAUDE.MD when adding new features or changing architecture
+- Update this CLAUDE.md when adding new features or changing architecture
 - Test locally before committing
 - Ensure backward compatibility with existing database schema (add migrations if needed)
 - New database tables should have a corresponding manager class; delegate methods from `core.py`
@@ -588,6 +611,6 @@ docker-compose down
 
 ---
 
-**Last Updated**: 2026-10-20
+**Last Updated**: 2026-10-22
 **Version**: v1.4
 **Maintainer**: eoko-dev

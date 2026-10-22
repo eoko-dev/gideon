@@ -2035,6 +2035,13 @@ class DashboardServer:
             response.content_length = os.path.getsize(backup_path)
             await response.prepare(request)
             with open(backup_path, 'rb') as f:
+                # Unlink while open (POSIX keeps the data readable) so the file
+                # is gone before the client has the last byte; the finally
+                # below covers platforms that can't remove open files
+                try:
+                    remove_sqlite_files(backup_path)
+                except OSError:
+                    pass
                 while True:
                     chunk = await asyncio.to_thread(f.read, CHUNK_SIZE * 4)
                     if not chunk:

@@ -1,4 +1,7 @@
 """Administrative commands for bot management."""
+import asyncio
+import platform
+import socket
 import discord
 import logging
 import os
@@ -162,15 +165,34 @@ class AdminCommands(commands.Cog, name="AdminCommands"):
     )
     @commands.has_permissions(administrator=True)
     async def diagnostic(self, ctx):
-        """Run diagnostic tests."""
-        # This will delegate to the existing diagnostic_commands cog
-        # Get the diagnostic cog
-        diagnostic_cog = self.bot.get_cog("DiagnosticCommands")
-        if diagnostic_cog:
-            # Call the existing diagnostic method
-            await diagnostic_cog.diagnostic_slash(ctx)
-        else:
-            await ctx.respond("❌ Diagnostic commands not available.", ephemeral=True)
+        """Connectivity, DNS and model diagnostics."""
+        await ctx.defer(ephemeral=True)
+        embed = discord.Embed(title="Gideon Diagnostic Report", color=discord.Color.blue())
+        embed.add_field(name="Python Version", value=f"Python {platform.python_version()}", inline=False)
+
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection("openrouter.ai", 443), timeout=5)
+            writer.close()
+            connectivity = "✅ Reached openrouter.ai:443"
+        except (OSError, asyncio.TimeoutError):
+            connectivity = "❌ Could not reach openrouter.ai:443"
+        embed.add_field(name="Internet Connectivity", value=connectivity, inline=False)
+
+        try:
+            await asyncio.get_running_loop().getaddrinfo("openrouter.ai", 443)
+            dns = "✅ DNS resolving correctly for openrouter.ai"
+        except socket.gaierror:
+            dns = "❌ Failed to resolve DNS for openrouter.ai"
+        embed.add_field(name="DNS Resolution", value=dns, inline=False)
+
+        state = self.bot.state_manager
+        embed.add_field(name="Current Global Model", value=f"`{state.get_global_model()}`", inline=False)
+        channel_model = state.get_channel_model(str(ctx.channel.id))
+        if channel_model:
+            embed.add_field(name="Channel-Specific Model", value=f"`{channel_model}`", inline=False)
+        utility = state.get_utility_model()
+        embed.add_field(name="Utility Model", value=f"`{utility}`" if utility else "Channel model", inline=False)
+        await ctx.respond(embed=embed, ephemeral=True)
 
     @admin.command(
         name="vision_models",

@@ -40,15 +40,24 @@ class ThreadManager:
             return None
 
     def prune_old_threads(self, cutoff_timestamp: datetime) -> int:
+        """Deletes threads created before the cutoff that have been quiet since.
+
+        A thread with a message newer than the cutoff is still in use and
+        keeps its model/prompt settings. Foreign keys aren't enforced, so the
+        thread's messages are deleted explicitly.
         """
-        Deletes threads older than the cutoff timestamp based on creation time.
-        Associated messages will be deleted due to CASCADE constraint.
+        stale = """
+        SELECT thread_id FROM THREADS t
+        WHERE created_at < ?
+          AND NOT EXISTS (SELECT 1 FROM MESSAGES m WHERE m.thread_id = t.thread_id AND m.timestamp >= ?)
         """
-        sql = "DELETE FROM THREADS WHERE created_at < ?;"
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (cutoff_timestamp,))
+                cursor.execute(f"DELETE FROM MESSAGES WHERE thread_id IN ({stale});",
+                               (cutoff_timestamp, cutoff_timestamp))
+                cursor.execute(f"DELETE FROM THREADS WHERE thread_id IN ({stale});",
+                               (cutoff_timestamp, cutoff_timestamp))
                 deleted_count = cursor.rowcount
             if deleted_count > 0:
                 logger.info(f"Pruned {deleted_count} old threads created before {cutoff_timestamp}.")
@@ -119,12 +128,12 @@ class ThreadManager:
             return []
 
     def delete_thread(self, thread_id: str) -> bool:
-        """Deletes a thread by its ID. Associated messages are deleted via CASCADE."""
-        sql = "DELETE FROM THREADS WHERE thread_id = ?;"
+        """Deletes a thread and its messages (foreign keys aren't enforced)."""
         try:
             with self._conn:
                 cursor = self._conn.cursor()
-                cursor.execute(sql, (thread_id,))
+                cursor.execute("DELETE FROM MESSAGES WHERE thread_id = ?;", (thread_id,))
+                cursor.execute("DELETE FROM THREADS WHERE thread_id = ?;", (thread_id,))
                 deleted = cursor.rowcount > 0
             if deleted:
                 logger.info(f"Deleted thread: {thread_id} and associated messages.")

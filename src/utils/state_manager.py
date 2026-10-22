@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import logging
+import sqlite3
 import asyncio # Keep for potential async operations like model validation
 
 import discord
@@ -72,8 +73,15 @@ class BotStateManager:
             return
 
         logger.info(f"Initializing BotStateManager instance with id: {id(self)}")
-        self.db_manager = DatabaseManager() # Initialize DB connection and schema
-        self.model_manager = None # Placeholder for ModelManager instance
+        if getattr(self, 'db_manager', None) is None or getattr(self.db_manager, '_conn', None) is None:
+            self.db_manager = DatabaseManager() # Initialize DB connection and schema
+        else:
+            # Reinitializing (after a restore or config import): keep the same
+            # connection, which other services hold, and migrate the schema
+            # forward in case an older backup was restored
+            self.db_manager.run_migrations()
+        if not hasattr(self, 'model_manager'):
+            self.model_manager = None # Placeholder for ModelManager instance
 
         # Load configuration from DB or set defaults
         self.max_channel_history = await self._load_or_set_config(CONFIG_KEY_MAX_HISTORY, 35, 'int')

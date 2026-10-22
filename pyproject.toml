@@ -1,0 +1,12 @@
+# Tool configuration only; dependencies live in requirements*.txt
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["venv", ".venv", "data"]
+
+[tool.ruff.lint]
+# Errors that break at runtime: syntax errors, undefined names, invalid
+# comparisons. Style rules are left off so the existing code passes; tighten
+# this list as modules get cleaned up.
+select = ["E9", "F63", "F7", "F82"]

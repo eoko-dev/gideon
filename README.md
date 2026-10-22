@@ -15,7 +15,7 @@
 [Commands](#-commands) • 
 [Models](#-supported-models) • 
 [Troubleshooting](#-troubleshooting) •
-[Developer Guide](CLAUDE.MD)
+[Developer Guide](CLAUDE.md)
 
 </div>
 
@@ -575,7 +575,7 @@ gideon/
 ├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
-├── CLAUDE.MD                       # Developer guide & architecture reference
+├── CLAUDE.md                       # Developer guide & architecture reference
 └── index.md                        # GitHub Pages landing page
 ```
 
@@ -615,7 +615,7 @@ gideon/
 
 ## 📖 Documentation
 
-For detailed technical information about Gideon's architecture, development patterns, and implementation details, see the [Developer Guide](CLAUDE.MD).
+For detailed technical information about Gideon's architecture, development patterns, and implementation details, see the [Developer Guide](CLAUDE.md).
 
 <div align="center">
 Made with ❤️ by <a href="https://github.com/eoko-dev">eoko</a>

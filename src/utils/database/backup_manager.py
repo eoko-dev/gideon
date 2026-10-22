@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import json
 import os
 import shutil
@@ -389,7 +390,8 @@ class BackupManager:
         """
         backup_conn = sqlite3.connect(backup_path)
         try:
-            self._conn.backup(backup_conn)
+            with getattr(self._conn, "lock", threading.RLock()):
+                getattr(self._conn, "raw", self._conn).backup(backup_conn)
             logger.info(f"SQLite backup created: {backup_path}")
         finally:
             backup_conn.close()
@@ -485,7 +487,7 @@ class BackupManager:
             # Step 1: Back up current database
             bak_conn = sqlite3.connect(bak_path)
             try:
-                self._conn.backup(bak_conn)
+                getattr(self._conn, "raw", self._conn).backup(bak_conn)
             finally:
                 bak_conn.close()
             logger.info(f"Pre-restore backup saved to: {bak_path}")
@@ -493,7 +495,9 @@ class BackupManager:
             # Step 2: Copy uploaded backup into the live connection
             source_conn = sqlite3.connect(backup_path)
             try:
-                source_conn.backup(self._conn)
+                # Hold the connection lock so no other thread uses it mid-restore
+                with getattr(self._conn, "lock", threading.RLock()):
+                    source_conn.backup(getattr(self._conn, "raw", self._conn))
             finally:
                 source_conn.close()
             logger.info(f"Database restored from: {backup_path}")

@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -22,6 +23,104 @@ from .usage_manager import UsageManager
 
 logger = logging.getLogger(__name__)
 
+
+class _LockedCursor:
+    """Cursor whose statements run under the connection's lock."""
+
+    def __init__(self, cursor, lock):
+        self._cursor = cursor
+        self._lock = lock
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.execute(*args, **kwargs)
+        return self
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            self._cursor.executemany(*args, **kwargs)
+        return self
+
+    def fetchone(self):
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchall(self):
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def fetchmany(self, *args):
+        with self._lock:
+            return self._cursor.fetchmany(*args)
+
+
+class LockedConnection:
+    """The shared sqlite3 connection, serialized across threads.
+
+    The bot uses one connection from the event loop and from worker threads
+    (``asyncio.to_thread`` writes, the dashboard's ``_db`` jobs). sqlite3
+    makes single calls thread-safe, but ``with conn:`` commit/rollback is
+    connection-wide, so one thread's commit could include another's
+    half-finished writes. A re-entrant lock held for each statement and for
+    the whole of a ``with conn:`` block keeps transactions whole.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.raw = conn
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        return getattr(self.raw, name)
+
+    @property
+    def lock(self):
+        return self._lock
+
+    def cursor(self):
+        return _LockedCursor(self.raw.cursor(), self._lock)
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return _LockedCursor(self.raw.execute(*args, **kwargs), self._lock)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return _LockedCursor(self.raw.executemany(*args, **kwargs), self._lock)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self.raw.executescript(*args, **kwargs)
+
+    def commit(self):
+        with self._lock:
+            self.raw.commit()
+
+    def rollback(self):
+        with self._lock:
+            self.raw.rollback()
+
+    def __enter__(self):
+        self._lock.acquire()
+        try:
+            self.raw.__enter__()
+        except BaseException:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            return self.raw.__exit__(*exc)
+        finally:
+            self._lock.release()
+
+
 class DatabaseManager:
     """Handles all interactions with the SQLite database."""
 
@@ -38,13 +137,17 @@ class DatabaseManager:
         self._conn = None
         try:
             # Use check_same_thread=False for potential async usage
-            self._conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
+            raw_conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
             # Use Row factory for dictionary-like access to rows
-            self._conn.row_factory = sqlite3.Row
+            raw_conn.row_factory = sqlite3.Row
+            self._conn = LockedConnection(raw_conn)
             # WAL keeps readers from blocking behind writers; NORMAL sync is
             # safe with WAL and avoids an fsync per transaction.
             self._conn.execute("PRAGMA journal_mode=WAL;")
             self._conn.execute("PRAGMA synchronous=NORMAL;")
+            # Wait for a competing writer (another connection, e.g. a cog's own
+            # DatabaseManager) instead of failing with "database is locked"
+            self._conn.execute("PRAGMA busy_timeout=5000;")
             logger.info(f"Connected to database: {self.db_path}")
 
             # Initialize schema
@@ -84,6 +187,10 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Database connection error to {self.db_path}: {e}", exc_info=True)
             raise
+
+    def run_migrations(self):
+        """Brings the schema up to date (e.g. after restoring an older backup)."""
+        SchemaManager.initialize(self._conn)
 
     def _get_cursor(self):
         """Returns a cursor for database operations."""

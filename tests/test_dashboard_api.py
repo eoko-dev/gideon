@@ -87,11 +87,13 @@ class SettingsTests(ApiTestCase):
             "max_memory_summaries", "tool_calling_max_iterations", "global_provider", "global_model"})
 
     async def test_booleans_must_be_json_booleans(self):
+        before = self.state.get_tool_calling_enabled()
         for value in ("true", 1, "false", None):
             resp = await self.client.put("/api/settings", json={"tool_calling_enabled": value})
             self.assertEqual(resp.status, 400, value)
             self.assertIn("tool_calling_enabled", (await resp.json())["details"])
-        self.assertFalse(self.state.get_tool_calling_enabled())
+        # Rejected values leave the setting as it was
+        self.assertEqual(self.state.get_tool_calling_enabled(), before)
 
     async def test_booleans_are_not_accepted_as_integers(self):
         resp = await self.client.put("/api/settings", json={"max_channel_history": True})
