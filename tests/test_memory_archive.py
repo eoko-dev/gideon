@@ -65,6 +65,7 @@ class RealStateTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.state.close_db)
         self.db = self.state.db_manager
         memory_service._channel_locks.clear()
+        memory_service._rotating.clear()
 
     def add(self, channel_id, content, hours_ago, **kwargs):
         return self.db.add_message(
@@ -130,6 +131,7 @@ class RotationTests(RealStateTestCase):
         client = FakeSummarizer()
 
         self.assertTrue(await memory_service.check_and_rotate_session("c1", self.state, {"openrouter": client}))
+        await memory_service.wait_for_background_tasks()
 
         for i in range(10):
             self.assertIn(f"msg-{i}", client.prompts[0])
@@ -146,6 +148,7 @@ class RotationTests(RealStateTestCase):
 
         client = FakeSummarizer(on_call=new_message_lands)
         await memory_service.check_and_rotate_session("c1", self.state, {"openrouter": client})
+        await memory_service.wait_for_background_tasks()
 
         self.assertEqual(self.contents("c1"), ["fresh"])
         self.assertEqual(len(self.memories("c1")), 1)
@@ -155,6 +158,25 @@ class RotationTests(RealStateTestCase):
         client = FakeSummarizer()
         self.assertFalse(await memory_service.check_and_rotate_session("c1", self.state, {"openrouter": client}))
         self.assertEqual(client.prompts, [])
+
+    async def test_rotation_does_not_block_the_caller(self):
+        for i in range(4):
+            self.add("c1", f"old-{i}", 30 - i)
+        hold = asyncio.Event()
+        client = FakeSummarizer(hold=hold)
+        clients = {"openrouter": client}
+
+        started = await asyncio.wait_for(memory_service.check_and_rotate_session("c1", self.state, clients), 1)
+        self.assertTrue(started)
+        # A second message while the summary is in flight starts no second rotation
+        self.assertFalse(await memory_service.check_and_rotate_session("c1", self.state, clients))
+        await self.state.add_to_channel_history("c1", {"role": "user", "content": "fresh", "name": "Bob"})
+
+        hold.set()
+        await memory_service.wait_for_background_tasks()
+        self.assertEqual(len(client.prompts), 1)
+        self.assertEqual(self.contents("c1"), ["fresh"])
+        self.assertEqual(len(self.memories("c1")), 1)
 
 
 # ─── C. Pre-prune archive sweep ─────────────────────────────────────────────
@@ -264,6 +286,7 @@ class DashboardMemoryTests(DashboardTestCase):
         await super().asyncSetUp()
         await self.login()
         memory_service._channel_locks.clear()
+        memory_service._rotating.clear()
 
     def add(self, content, hours_ago=1, channel_id="100"):
         return self.db.add_message("user", content, datetime.now() - timedelta(hours=hours_ago),

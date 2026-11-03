@@ -62,7 +62,9 @@ class UserMemoryTestCase(RealStateTestCase):
         return user_memory.split_notes(row["notes"]) if row else []
 
     async def rotate(self, channel_id, client):
-        return await memory_service.check_and_rotate_session(channel_id, self.state, {"openrouter": client})
+        started = await memory_service.check_and_rotate_session(channel_id, self.state, {"openrouter": client})
+        await memory_service.wait_for_background_tasks()
+        return started
 
 
 # ─── A. Storage isolation ───────────────────────────────────────────────────
