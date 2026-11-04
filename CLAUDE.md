@@ -496,9 +496,9 @@ Logging uses Python's standard `logging` module:
 
 ### Session Rotation & Channel Memory Flow
 1. User sends a message to a channel (via `/chat` or @mention)
-2. `check_and_rotate_session(channel_id, state, clients)` is called from `memory_service.py` **before** fetching history
-3. The timestamp of the most recent stored message is compared to `session_timeout_hours`
-4. If the session has expired **and** `memory_summary_enabled` is True **and** history has ≥ 3 messages:
+2. `check_and_rotate_session(channel_id, state, clients)` is called from `memory_service.py` **before** recording the new message
+3. The timestamp of the most recent stored message is compared to `session_timeout_hours`. If expired, the rotation is started as a background task (one per channel at a time) and the call returns immediately — the reply never waits on the summary/notes LLM calls, and sees the old rows until they're archived
+4. In the background, under the channel lock, if `memory_summary_enabled` is True **and** history has ≥ 3 messages:
    a. Existing channel memories are fetched and injected as context into the summarization prompt
    b. The LLM generates a 2–3 sentence summary of the old conversation
    c. The summary is stored in `CHANNEL_MEMORY` with the original `conversation_start` timestamp

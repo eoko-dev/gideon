@@ -61,17 +61,32 @@ Conversation:
 # Serializes rotation/compaction per channel: concurrent messages would
 # otherwise each summarize the same rows and store duplicate memories.
 _channel_locks: Dict[str, asyncio.Lock] = {}
-# Strong refs so scheduled compactions aren't garbage-collected mid-run
+# Channels with a rotation scheduled or running
+_rotating: Set[str] = set()
+# Strong refs so scheduled work isn't garbage-collected mid-run
 _background_tasks: Set[asyncio.Task] = set()
 
 
 async def cancel_background_tasks():
-    """Cancels in-flight compactions (called on shutdown, before the DB closes)."""
+    """Cancels in-flight rotations/compactions (called on shutdown, before the DB closes)."""
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def wait_for_background_tasks():
+    """Waits until every scheduled rotation/compaction has finished."""
+    while _background_tasks:
+        await asyncio.gather(*list(_background_tasks), return_exceptions=True)
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def _channel_lock(channel_id: str) -> asyncio.Lock:
@@ -89,41 +104,60 @@ def llm_clients(bot) -> Dict[str, Any]:
 
 async def check_and_rotate_session(channel_id: str, state, clients: dict) -> bool:
     """
-    Checks whether the channel's session has expired. If so, optionally
-    summarizes the history, stores a memory entry, and clears the history.
+    Starts a session rotation if the channel's session has expired: the old
+    rows are summarized into a memory, people notes are updated, and the
+    summarized rows are deleted.
+
+    The rotation runs in the background. Summary and notes are LLM calls that
+    can take minutes when a provider stalls, and the message that ended the
+    silence shouldn't wait for them; its reply still sees the old rows until
+    they are archived.
 
     Must be called *before* adding the new incoming message to history.
     `clients` must be a dict mapping provider name → client object.
 
-    Returns True if a rotation occurred, False otherwise.
+    Returns True if a rotation was started, False otherwise.
     """
-    if not _session_expired(channel_id, state):
+    channel_id = str(channel_id)
+    if channel_id in _rotating:
         return False
+    through_pk = _expired_through(channel_id, state)
+    if through_pk is None:
+        return False
+    _rotating.add(channel_id)
+    _spawn(_rotate_in_background(channel_id, through_pk, state, clients))
+    return True
 
-    async with _channel_lock(channel_id):
-        # A concurrent message may have rotated while we waited for the lock
-        if not _session_expired(channel_id, state):
-            return False
-        return await _rotate_session(channel_id, state, clients)
 
-
-def _session_expired(channel_id: str, state) -> bool:
+def _expired_through(channel_id: str, state) -> Optional[int]:
+    """The primary key of the channel's last message if its session has expired, else None."""
     timeout_hours = state.get_effective_session_timeout(channel_id)
     history = state.get_channel_history(channel_id, limit=1)
     if not history:
-        return False
+        return None
 
     last_ts = _parse_timestamp(history[-1].get("timestamp"))
-    if last_ts is None:
-        return False
+    if last_ts is None or datetime.now() - last_ts <= timedelta(hours=timeout_hours):
+        return None
+    return history[-1].get("message_pk")
 
-    return datetime.now() - last_ts > timedelta(hours=timeout_hours)
+
+async def _rotate_in_background(channel_id: str, through_pk: Optional[int], state, clients: dict) -> None:
+    try:
+        async with _channel_lock(channel_id):
+            await _rotate_session(channel_id, state, clients, through_pk)
+    except Exception as e:
+        logger.error(f"[Memory] Error rotating session for channel {channel_id}: {e}", exc_info=True)
+    finally:
+        _rotating.discard(channel_id)
 
 
-async def _rotate_session(channel_id: str, state, clients: dict) -> bool:
+async def _rotate_session(channel_id: str, state, clients: dict, through_pk: Optional[int] = None) -> bool:
     # Read everything stored, not just the history window — otherwise the
-    # overflow would be deleted below without being summarized
-    history = state.get_full_channel_history(channel_id)
+    # overflow would be deleted below without being summarized. Rows after
+    # ``through_pk`` belong to the new session.
+    history = [m for m in state.get_full_channel_history(channel_id)
+               if through_pk is None or m["message_pk"] <= through_pk]
     if not history:
         return False
     age = datetime.now() - _parse_timestamp(history[-1].get("timestamp"))
@@ -131,7 +165,7 @@ async def _rotate_session(channel_id: str, state, clients: dict) -> bool:
 
     logger.info(
         f"[Memory] Session expired for channel {channel_id} "
-        f"(last activity {age} ago, timeout {timeout_hours}h). Rotating."
+        f"(last activity {age} ago, timeout {timeout_hours}h). Rotating in the background."
     )
 
     if _summary_due(channel_id, history, state):
@@ -171,9 +205,7 @@ def schedule_compaction(channel_id: str, state, clients: dict) -> None:
     inline delays the reply and widens the window for other messages to
     land before the reply reads history.
     """
-    task = asyncio.create_task(_compact_safely(channel_id, state, clients))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _spawn(_compact_safely(channel_id, state, clients))
 
 
 async def _compact_safely(channel_id: str, state, clients: dict) -> None:

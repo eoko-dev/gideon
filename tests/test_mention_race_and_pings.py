@@ -212,6 +212,7 @@ class BlockingClient:
 class MemoryServiceConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         memory_service._channel_locks.clear()
+        memory_service._rotating.clear()
 
     async def test_concurrent_compactions_summarize_once(self):
         state, client = FakeMemoryState(), BlockingClient()
@@ -276,10 +277,10 @@ class MemoryServiceConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         task = next(iter(memory_service._background_tasks))
         await asyncio.wait_for(task, 2)  # must not raise
 
-    async def test_session_rotation_rechecks_expiry_under_lock(self):
+    async def test_session_rotation_never_waits_for_the_channel_lock(self):
         class RotState:
             def __init__(self):
-                self.rows = [{"role": "user", "content": "old",
+                self.rows = [{"message_pk": 1, "role": "user", "content": "old",
                               "timestamp": datetime.now() - timedelta(hours=10)}]
 
             def get_effective_session_timeout(self, channel_id):
@@ -293,14 +294,15 @@ class MemoryServiceConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         await lock.acquire()
         rotate = mock.AsyncMock(return_value=True)
         with mock.patch.object(memory_service, "_rotate_session", rotate):
-            waiter = asyncio.create_task(memory_service.check_and_rotate_session("c1", state, {}))
-            await asyncio.sleep(0)
-            self.assertFalse(waiter.done())
-            # Someone else rotates / posts a fresh message while we wait
-            state.rows = [{"role": "user", "content": "new", "timestamp": datetime.now()}]
-            lock.release()
-            self.assertFalse(await asyncio.wait_for(waiter, 2))
+            # Returns at once even though a compaction/prune holds the lock
+            self.assertTrue(await asyncio.wait_for(
+                memory_service.check_and_rotate_session("c1", state, {}), 1))
+            self.assertFalse(await memory_service.check_and_rotate_session("c1", state, {}))
             rotate.assert_not_awaited()
+            lock.release()
+            await asyncio.wait_for(memory_service.wait_for_background_tasks(), 2)
+            rotate.assert_awaited_once_with("c1", state, {}, 1)
+        self.assertNotIn("c1", memory_service._rotating)
 
 
 # ─── E. Incident regression for MentionCommands ─────────────────────────────
